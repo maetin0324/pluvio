@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+crossbeam-channel = "0.5.14"
+futures = "0.3.31"
+io-uring = "0.7.3"
+waker-fn = "1.2.0"
