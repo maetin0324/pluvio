@@ -36,11 +36,11 @@ impl<T> Runtime<T> {
     }
 
     /// ランタイムのイベントループを実行します。
-    pub fn run(&self) {
+    pub fn run_queue(&self) {
         loop {
             // タスクを処理
             while let Ok(task) = self.task_receiver.try_recv() {
-                task.poll();
+                let _ = task.poll();
             }
 
             // Reactor の完了イベントをポーリング
@@ -54,5 +54,13 @@ impl<T> Runtime<T> {
             }
 
         }
+    }
+
+    pub fn run<F>(&self, future: F)
+    where
+        F: Future<Output = T> + Send + 'static,
+    {
+        self.spawn(future);
+        self.run_queue();
     }
 }
