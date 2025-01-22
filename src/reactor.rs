@@ -71,4 +71,9 @@ impl Reactor {
           }
       }
   }
+
+  pub fn is_empty(&self) -> bool {
+      let completions = self.completions.lock().unwrap();
+      completions.is_empty()
+  }
 }

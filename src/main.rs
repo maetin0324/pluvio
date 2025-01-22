@@ -1,19 +1,4 @@
-// Cargo.toml
-/*
-[package]
-name = "custom_runtime_with_reactor"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-io-uring = "0.7"
-futures = "0.3"
-crossbeam-channel = "0.5"
-waker_fn = "1.1"
-*/
-
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
-
 use io_uring::types;
 use ucio::executor::Runtime;
 use ucio::future::{ReadFileFuture, WriteFileFuture};
@@ -40,10 +25,10 @@ fn main() {
     let read_offset2 = 256;
 
     // 書き込みバッファの準備
-    let write_buffer1 = vec![0x41u8; 512];
-    let write_buffer2 = vec![0x42u8; 256];
+    let write_buffer1 = vec![0x41u8; 1024 * 1024 * 1024];
+    let write_buffer2 = vec![0x42u8; 1024 * 1024 * 1024];
     let write_offset1 = 0;
-    let write_offset2 = 512;
+    let write_offset2 = 1024 * 1024 * 1024;
 
     // ランタイムの作成
     let runtime = Arc::new(Runtime::new(256));

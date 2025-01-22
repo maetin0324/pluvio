@@ -119,6 +119,7 @@ impl Future for WriteFileFuture {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.take() {
+            eprintln!("WriteFileFuture completed, wrtired {} bytes", this.buffer.len());
             return Poll::Ready(result);
         }
 

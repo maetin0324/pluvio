@@ -30,7 +30,7 @@ pub struct Task<T: 'static> {
 }
 
 impl<T> Task<T> {
-  pub fn poll(self: Arc<Self>) {
+  pub fn poll(self: Arc<Self>) -> Poll<T> {
       let waker = waker_fn::waker_fn({
           let task = self.clone();
           move || {
@@ -43,9 +43,9 @@ impl<T> Task<T> {
       let mut future_slot = self.future.lock().unwrap();
 
       match future_slot.as_mut().poll(&mut context) {
-          Poll::Pending => {}
-          Poll::Ready(_) => {
-              // 完了したタスクは特に処理しない
+          Poll::Pending => {Poll::Pending}
+          Poll::Ready(t) => {
+              Poll::Ready(t)
           }
       }
   }

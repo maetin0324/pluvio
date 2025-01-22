@@ -22,7 +22,6 @@ impl<T> Runtime<T> {
         }
     }
 
-    /// 新しい Future をランタイムに登録します。
     pub fn spawn<F>(&self, future: F)
     where
         F: Future<Output = T> + Send + 'static,
@@ -49,6 +48,10 @@ impl<T> Runtime<T> {
 
             // イベントループの待機（適宜調整）
             std::thread::sleep(std::time::Duration::from_millis(10));
+
+            if self.task_receiver.is_empty() && self.reactor.is_empty() {
+                break;
+            }
 
         }
     }
