@@ -1,11 +1,11 @@
-use io_uring::types;
-use crate::SharedState;
 use crate::reactor::Reactor;
+use crate::SharedState;
+use io_uring::types;
+use std::future::Future;
 use std::io::Result;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::future::Future;
 
 // ReadFileFuture の定義
 pub struct ReadFileFuture {
@@ -17,12 +17,7 @@ pub struct ReadFileFuture {
 }
 
 impl ReadFileFuture {
-    pub fn new(
-        fd: types::Fd,
-        buffer: Vec<u8>,
-        offset: u64,
-        reactor: Arc<Reactor>,
-    ) -> Self {
+    pub fn new(fd: types::Fd, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
         ReadFileFuture {
             shared_state: Arc::new(Mutex::new(SharedState::new())),
             fd,
@@ -57,7 +52,8 @@ impl Future for ReadFileFuture {
                     this.fd,
                     this.buffer.as_mut_ptr(),
                     this.buffer.len() as u32,
-                ).offset(this.offset)
+                )
+                .offset(this.offset)
                 .build()
                 // let mut ring = this.reactor.ring.lock().unwrap();
                 // match ring.submission().get_sqe() {
@@ -83,7 +79,6 @@ impl Future for ReadFileFuture {
     }
 }
 
-
 // WriteFileFuture の定義
 pub struct WriteFileFuture {
     shared_state: Arc<Mutex<SharedState>>,
@@ -94,12 +89,7 @@ pub struct WriteFileFuture {
 }
 
 impl WriteFileFuture {
-    pub fn new(
-        fd: types::Fd,
-        buffer: Vec<u8>,
-        offset: u64,
-        reactor: Arc<Reactor>,
-    ) -> Self {
+    pub fn new(fd: types::Fd, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
         WriteFileFuture {
             shared_state: Arc::new(Mutex::new(SharedState::new())),
             fd,
@@ -119,7 +109,10 @@ impl Future for WriteFileFuture {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.take() {
-            eprintln!("WriteFileFuture completed, wrtired {} bytes", this.buffer.len());
+            eprintln!(
+                "WriteFileFuture completed, wrtired {} bytes",
+                this.buffer.len()
+            );
             return Poll::Ready(result);
         }
 
@@ -134,7 +127,8 @@ impl Future for WriteFileFuture {
                     this.fd,
                     this.buffer.as_ptr() as *const _,
                     this.buffer.len() as u32,
-                ).offset(this.offset)
+                )
+                .offset(this.offset)
                 .build()
                 // let mut ring = this.reactor.ring.lock().unwrap();
                 // match ring.submission().next() {
