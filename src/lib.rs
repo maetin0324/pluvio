@@ -16,6 +16,12 @@ pub struct SharedState<T> {
     pub result: Mutex<Option<Result<T, String>>>,
 }
 
+impl<T> Default for SharedState<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> SharedState<T> {
     pub fn new() -> Self {
         SharedState {

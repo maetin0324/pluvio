@@ -1,5 +1,5 @@
 use std::{
-    any::Any, collections::HashMap, io::Error, sync::{
+    collections::HashMap, io::Error, sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     }
