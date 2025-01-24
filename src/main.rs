@@ -3,8 +3,19 @@ use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use ucio::executor::Runtime;
 use ucio::future::{ReadFileFuture, WriteFileFuture};
 
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
 // main 関数
 fn main() {
+    tracing_subscriber::registry()
+    .with(
+      tracing_subscriber::EnvFilter::try_from_default_env()
+      .unwrap_or_else(|_| "Debug".into())
+    )
+    .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
+    .init();
+
     let runtime = Arc::new(Runtime::new(256));
     let reactor = runtime.reactor.clone();
     runtime.run(async move {

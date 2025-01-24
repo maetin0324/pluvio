@@ -7,4 +7,6 @@ edition = "2021"
 crossbeam-channel = "0.5.14"
 futures = "0.3.31"
 io-uring = "0.7.3"
+tracing = "0.1.41"
+tracing-subscriber = {version = "0.3.19", features = ["env-filter"]}
 waker-fn = "1.2.0"

@@ -2,14 +2,14 @@ use crate::reactor::Reactor;
 use crate::SharedState;
 use io_uring::types;
 use std::future::Future;
-use std::io::Result;
+// use std::io::Result;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 // ReadFileFuture の定義
 pub struct ReadFileFuture {
-    shared_state: Arc<Mutex<SharedState>>,
+    shared_state: Arc<Mutex<SharedState<usize>>>,
     fd: types::Fd,
     buffer: Vec<u8>,
     offset: u64,
@@ -29,20 +29,20 @@ impl ReadFileFuture {
 }
 
 impl Future for ReadFileFuture {
-    type Output = Result<usize>;
+    type Output = Result<usize, String>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let mut shared = this.shared_state.lock().unwrap();
 
         // 既に結果がある場合は Ready を返す
-        if let Some(result) = shared.result.take() {
+        if let Some(result) = shared.result.lock().unwrap().take() {
             dbg!(&this.buffer);
             return Poll::Ready(result);
         }
 
         // I/O 操作をまだ登録していない場合、登録する
-        if shared.waker.is_none() {
+        if shared.waker.lock().unwrap().is_none() {
             // Reactor に SharedState を登録し、user_data を取得
             let user_data = this.reactor.register_io(this.shared_state.clone());
 
@@ -74,14 +74,14 @@ impl Future for ReadFileFuture {
         }
 
         // Waker を保存してタスクを再開可能にする
-        shared.waker = Some(cx.waker().clone());
+        shared.waker = Mutex::new(Some(cx.waker().clone()));
         Poll::Pending
     }
 }
 
 // WriteFileFuture の定義
 pub struct WriteFileFuture {
-    shared_state: Arc<Mutex<SharedState>>,
+    shared_state: Arc<Mutex<SharedState<usize>>>,
     fd: types::Fd,
     buffer: Vec<u8>,
     offset: u64,
@@ -101,14 +101,14 @@ impl WriteFileFuture {
 }
 
 impl Future for WriteFileFuture {
-    type Output = Result<usize>;
+    type Output = Result<usize, String>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let mut shared = this.shared_state.lock().unwrap();
 
         // 既に結果がある場合は Ready を返す
-        if let Some(result) = shared.result.take() {
+        if let Some(result) = shared.result.lock().unwrap().take() {
             eprintln!(
                 "WriteFileFuture completed, wrtired {} bytes",
                 this.buffer.len()
@@ -117,7 +117,7 @@ impl Future for WriteFileFuture {
         }
 
         // I/O 操作をまだ登録していない場合、登録する
-        if shared.waker.is_none() {
+        if shared.waker.lock().unwrap().is_none() {
             // Reactor に SharedState を登録し、user_data を取得
             let user_data = this.reactor.register_io(this.shared_state.clone());
 
@@ -148,7 +148,7 @@ impl Future for WriteFileFuture {
         }
 
         // Waker を保存してタスクを再開可能にする
-        shared.waker = Some(cx.waker().clone());
+        shared.waker = Mutex::new(Some(cx.waker().clone()));
         Poll::Pending
     }
 }
