@@ -69,7 +69,7 @@ impl Runtime {
 
     /// ランタイムのイベントループを実行します。
     pub fn run_queue(&self) {
-        while self.task_receiver.len() > 0 {
+        while !self.task_receiver.is_empty() {
             tracing::trace!("event loop task_receiver: {:?}", self.task_receiver.len());
             // タスクを処理x
             while let Ok(task) = self.task_receiver.try_recv() {
