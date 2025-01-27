@@ -51,6 +51,7 @@ impl<T> TaskTrait for Task<T> where T: Send + Sync + 'static {
         let waker = waker_fn::waker_fn({
             let task = self.clone();
             move || {
+                tracing::trace!("TaskTrait::poll_task waker_fn");
                 // タスクを再スケジュール
                 task.task_sender
                     .send(task.clone())
@@ -62,8 +63,14 @@ impl<T> TaskTrait for Task<T> where T: Send + Sync + 'static {
         let mut future_slot = self.future.lock().unwrap();
 
         match future_slot.as_mut().poll(&mut context) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(t) => Poll::Ready(t),
+            Poll::Pending => {
+                tracing::trace!("TaskTrait::poll_task Poll::Pending");
+                Poll::Pending
+            },
+            Poll::Ready(t) => {
+                tracing::trace!("TaskTrait::poll_task Poll::Ready");
+                Poll::Ready(t)
+            },
         }
     }
 }

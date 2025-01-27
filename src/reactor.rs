@@ -28,6 +28,7 @@ impl Reactor {
 
     /// I/O 操作を登録し、対応する SharedState をマッピングに追加します。
     pub fn register_io(&self, shared_state: Arc<Mutex<SharedState<usize>>>) -> u64 {
+        tracing::trace!("Reactor::register_io");
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
         let mut completions = self.completions.lock().unwrap();
         completions.insert(user_data, shared_state);
@@ -36,6 +37,7 @@ impl Reactor {
 
     /// I/O 操作を送信します。
     pub fn submit_io(&self, sqe: io_uring::squeue::Entry, user_data: u64) {
+        tracing::trace!("Reactor::submit_io user_data: {}", user_data);
         let mut ring = self.ring.lock().unwrap();
         unsafe {
             let sqe = sqe.user_data(user_data);
@@ -48,6 +50,7 @@ impl Reactor {
 
     /// 完了キューをポーリングし、完了した I/O 操作を処理します。
     pub fn poll_completions(&self) {
+        tracing::trace!("Reactor::poll_completions");
         let mut ring = self.ring.lock().unwrap();
         let cq = ring.completion();
 

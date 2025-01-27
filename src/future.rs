@@ -37,7 +37,7 @@ impl Future for ReadFileFuture {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.lock().unwrap().take() {
-            dbg!(&this.buffer);
+            tracing::trace!("ReadFileFuture completed, read {} bytes", this.buffer.len());
             return Poll::Ready(result);
         }
 
