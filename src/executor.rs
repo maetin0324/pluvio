@@ -108,21 +108,34 @@ impl Runtime {
         });
 
         // タスクをキューに送信
-        self.polling_task_sender.send(task).expect("Failed to send task");
+        self.polling_task_sender
+            .send(task)
+            .expect("Failed to send task");
 
         tracing::trace!("Runtime::spawn task_sent, return handle");
         handle
     }
 
     pub fn run_queue(&self) {
-        while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty() {
+        while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
+        {
             tracing::trace!("event loop task_receiver: {:?}", self.task_receiver.len());
 
-            while let Ok(task) = self.polling_task_receiver.try_recv() {
-                tracing::trace!("polling_task_receiver: {:?}", self.polling_task_receiver.len());
-                let _ = task.poll_task();
-            }
-            
+            // yield_nowされたタスクが入ると無限ループしてしまうので
+            // 現時点でReceiverにあるタスクのみを処理
+            // polling_task_receiverにあるタスクを一度に取り出して処理
+        let mut polling_tasks = Vec::new();
+        while let Ok(task) = self.polling_task_receiver.try_recv() {
+            polling_tasks.push(task);
+        }
+        for task in polling_tasks {
+            tracing::trace!(
+                "polling_task_receiver processing task, remaining tasks: {:?}",
+                self.polling_task_receiver.len()
+            );
+            let _ = task.poll_task();
+        }
+
             if let Ok(task) = self.task_receiver.try_recv() {
                 tracing::trace!("task_receiver: {:?}", self.task_receiver.len());
                 let _ = task.poll_task();

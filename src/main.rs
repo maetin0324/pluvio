@@ -33,10 +33,10 @@ fn main() {
         let read_offset1 = 0;
         let read_offset2 = 256;
 
-        let write_buffer1 = vec![0x41u8; 5 * 1024 * 1024 * 1024];
-        let write_buffer2 = vec![0x42u8; 5 * 1024 * 1024 * 1024];
+        let write_buffer1 = vec![0x41u8; 1 * 1024 * 1024 * 1024];
+        let write_buffer2 = vec![0x42u8; 1 * 1024 * 1024 * 1024];
         let write_offset1 = 0;
-        let write_offset2 = 5 * 1024 * 1024 * 1024;
+        let write_offset2 = 1 * 1024 * 1024 * 1024;
 
         ReadFileFuture::new(
             types::Fd(fd),
@@ -86,26 +86,26 @@ pub struct CountFuture {
 }
 
 impl CountFuture {
-pub fn new(complete_count: u32) -> Self {
-    CountFuture {
-    count: 0,
-    complete_count,
+    pub fn new(complete_count: u32) -> Self {
+        CountFuture {
+        count: 0,
+        complete_count,
+        }
     }
-}
 }
 
 impl std::future::Future for CountFuture {
-type Output = u32;
+    type Output = u32;
 
-fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-    let this = self.get_mut();
-    this.count += 1;
-    if this.count < this.complete_count {
-        cx.waker().wake_by_ref();
-        std::task::Poll::Pending
-    } else {
-        println!("CountFuture is ready with value: {}", this.count);
-        std::task::Poll::Ready(this.count)
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        this.count += 1;
+        if this.count < this.complete_count {
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        } else {
+            println!("CountFuture is ready with value: {}", this.count);
+            std::task::Poll::Ready(this.count)
+        }
     }
-}
 }
