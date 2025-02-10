@@ -7,7 +7,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-// ReadFileFuture の定義
 pub struct ReadFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
     fd: types::Fd,
@@ -79,7 +78,6 @@ impl Future for ReadFileFuture {
     }
 }
 
-// WriteFileFuture の定義
 pub struct WriteFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
     fd: types::Fd,

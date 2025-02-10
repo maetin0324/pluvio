@@ -35,6 +35,27 @@ pub struct JoinHandle<T> {
     pub shared_state: Arc<Mutex<SharedState<T>>>,
 }
 
+impl<T> Future for JoinHandle<T> {
+    type Output = Result<T, String>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let shared = self.shared_state.lock().unwrap();
+
+        // 既に結果がある場合は Ready を返す
+        if let Some(result) = shared.result.lock().unwrap().take() {
+            tracing::trace!("JoinHandle completed");
+            return Poll::Ready(result);
+        }
+
+        // Waker を登録
+        let waker = cx.waker().clone();
+        let mut waker_slot = shared.waker.lock().unwrap();
+        *waker_slot = Some(waker);
+
+        Poll::Pending
+    }
+}
+
 // Task 構造体の定義
 pub struct Task<T: Send + Sync + 'static> {
     pub future: Arc<Mutex<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>>,
