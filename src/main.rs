@@ -12,7 +12,7 @@ fn main() {
     tracing_subscriber::registry()
     .with(
       tracing_subscriber::EnvFilter::try_from_default_env()
-      .unwrap_or_else(|_| "Trace".into())
+      .unwrap_or_else(|_| "Debug".into())
     )
     .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
     .init();
@@ -68,6 +68,8 @@ fn main() {
             reactor.clone(),
         ));
         p().await;
+        let c = runtime.clone().spawn_polling(CountFuture::new(1000)).await.unwrap();
+        tracing::debug!("CountFuture completed, count: {}", c);
         let (ret1, ret2) = futures::join!(h1, h2);
         tracing::debug!("WriteFileFuture completed, ret1 {} bytes, ret2 {} bytes", ret1.unwrap().unwrap(), ret2.unwrap().unwrap());
         // tracing::debug!("BackTrace: {:#?}", std::backtrace::Backtrace::force_capture());
@@ -76,4 +78,34 @@ fn main() {
 
 async fn p() {
     println!("Hello, world!");
+}
+
+pub struct CountFuture {
+    count: u32,
+    complete_count: u32,
+}
+
+impl CountFuture {
+pub fn new(complete_count: u32) -> Self {
+    CountFuture {
+    count: 0,
+    complete_count,
+    }
+}
+}
+
+impl std::future::Future for CountFuture {
+type Output = u32;
+
+fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    let this = self.get_mut();
+    this.count += 1;
+    if this.count < this.complete_count {
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    } else {
+        println!("CountFuture is ready with value: {}", this.count);
+        std::task::Poll::Ready(this.count)
+    }
+}
 }

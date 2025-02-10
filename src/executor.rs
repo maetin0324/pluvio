@@ -11,17 +11,22 @@ use crate::{reactor::Reactor, JoinHandle, SharedState, Task, TaskTrait};
 pub struct Runtime {
     pub reactor: Arc<Reactor>,
     task_sender: Sender<Arc<dyn TaskTrait>>,
+    polling_task_sender: Sender<Arc<dyn TaskTrait>>,
     pub task_receiver: Receiver<Arc<dyn TaskTrait>>,
+    pub polling_task_receiver: Receiver<Arc<dyn TaskTrait>>,
 }
 
 impl Runtime {
     pub fn new(queue_size: u32) -> Arc<Self> {
         let reactor = Arc::new(Reactor::new(queue_size));
         let (task_sender, task_receiver) = unbounded();
+        let (polling_task_sender, polling_task_receiver) = unbounded();
         Arc::new(Runtime {
             reactor,
             task_sender,
+            polling_task_sender,
             task_receiver,
+            polling_task_receiver,
         })
     }
 
@@ -67,11 +72,58 @@ impl Runtime {
         handle
     }
 
+    pub fn spawn_polling<F, T>(&self, future: F) -> JoinHandle<T>
+    where
+        F: Future<Output = T> + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+    {
+        let shared = Arc::new(Mutex::new(SharedState::<T> {
+            result: Mutex::new(None),
+            waker: Mutex::new(None),
+        }));
+
+        let handle = JoinHandle {
+            shared_state: shared.clone(),
+        };
+
+        // Clone shared before moving into async block
+        let shared_clone = shared.clone();
+        let wrapped_future = async move {
+            let res = future.await;
+            {
+                let binding = shared_clone.lock().unwrap();
+                let mut result = binding.result.lock().unwrap();
+                *result = Some(Ok(res));
+            }
+            if let Some(waker) = shared_clone.lock().unwrap().waker.lock().unwrap().take() {
+                tracing::trace!("Runtime::spawn wake");
+                waker.wake();
+            }
+        };
+        tracing::trace!("Runtime::spawn wrapped_future");
+        let task = Arc::new(Task {
+            future: Arc::new(Mutex::new(Box::pin(wrapped_future))),
+            task_sender: self.polling_task_sender.clone(),
+            shared_state: shared,
+        });
+
+        // タスクをキューに送信
+        self.polling_task_sender.send(task).expect("Failed to send task");
+
+        tracing::trace!("Runtime::spawn task_sent, return handle");
+        handle
+    }
+
     pub fn run_queue(&self) {
         while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty() {
             tracing::trace!("event loop task_receiver: {:?}", self.task_receiver.len());
-            // タスクを処理x
-            while let Ok(task) = self.task_receiver.try_recv() {
+
+            while let Ok(task) = self.polling_task_receiver.try_recv() {
+                tracing::trace!("polling_task_receiver: {:?}", self.polling_task_receiver.len());
+                let _ = task.poll_task();
+            }
+            
+            if let Ok(task) = self.task_receiver.try_recv() {
                 tracing::trace!("task_receiver: {:?}", self.task_receiver.len());
                 let _ = task.poll_task();
             }
