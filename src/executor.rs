@@ -32,8 +32,8 @@ impl Runtime {
 
     pub fn spawn<F, T>(&self, future: F) -> JoinHandle<T>
     where
-        F: Future<Output = T> + Send + Sync + 'static,
-        T: Send + Sync + 'static,
+        F: Future<Output = T> + 'static,
+        T: 'static,
     {
         let shared = Arc::new(Mutex::new(SharedState::<T> {
             result: Mutex::new(None),
@@ -74,8 +74,8 @@ impl Runtime {
 
     pub fn spawn_polling<F, T>(&self, future: F) -> JoinHandle<T>
     where
-        F: Future<Output = T> + Send + Sync + 'static,
-        T: Send + Sync + 'static,
+        F: Future<Output = T> + 'static,
+        T: 'static,
     {
         let shared = Arc::new(Mutex::new(SharedState::<T> {
             result: Mutex::new(None),
@@ -124,17 +124,17 @@ impl Runtime {
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
             // polling_task_receiverにあるタスクを一度に取り出して処理
-        let mut polling_tasks = Vec::new();
-        while let Ok(task) = self.polling_task_receiver.try_recv() {
-            polling_tasks.push(task);
-        }
-        for task in polling_tasks {
-            tracing::trace!(
-                "polling_task_receiver processing task, remaining tasks: {:?}",
-                self.polling_task_receiver.len()
-            );
-            let _ = task.poll_task();
-        }
+            let mut polling_tasks = Vec::new();
+            while let Ok(task) = self.polling_task_receiver.try_recv() {
+                polling_tasks.push(task);
+            }
+            for task in polling_tasks {
+                tracing::trace!(
+                    "polling_task_receiver processing task, remaining tasks: {:?}",
+                    self.polling_task_receiver.len()
+                );
+                let _ = task.poll_task();
+            }
 
             if let Ok(task) = self.task_receiver.try_recv() {
                 tracing::trace!("task_receiver: {:?}", self.task_receiver.len());
@@ -151,8 +151,8 @@ impl Runtime {
 
     pub fn run<F, T>(&self, future: F)
     where
-        F: Future<Output = T> + Send + Sync + 'static,
-        T: Send + Sync + 'static,
+        F: Future<Output = T> + 'static,
+        T: 'static,
     {
         self.spawn(future);
         self.run_queue();
