@@ -1,13 +1,15 @@
 use std::{
-    collections::HashMap, io::Error, sync::{
+    collections::HashMap,
+    io::Error,
+    sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
-    }
+    },
 };
 
 use io_uring::IoUring;
 
-use crate::SharedState;
+use crate::task::SharedState;
 
 // Reactor の定義
 pub struct Reactor {
@@ -69,7 +71,9 @@ impl Reactor {
                     shared.result = Mutex::new(Some(Ok(cqe.result() as usize)));
                 } else {
                     // エラーハンドリング
-                    shared.result = Mutex::new(Some(Err(Error::from_raw_os_error(-cqe.result()).to_string())));
+                    shared.result = Mutex::new(Some(Err(
+                        Error::from_raw_os_error(-cqe.result()).to_string()
+                    )));
                 }
 
                 // Waker を呼び出してタスクを再開

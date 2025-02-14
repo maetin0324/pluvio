@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 crossbeam-channel = "0.5.14"
 futures = "0.3.31"
+futures-lite = "2.6.0"
 io-uring = "0.7.3"
 tracing = "0.1.41"
 tracing-subscriber = {version = "0.3.19", features = ["env-filter"]}

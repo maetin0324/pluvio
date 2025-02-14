@@ -5,7 +5,7 @@ use std::{
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::{reactor::Reactor, JoinHandle, SharedState, Task, TaskTrait};
+use crate::{reactor::Reactor, task::JoinHandle, task::SharedState, task::Task, task::TaskTrait};
 
 // Runtime の定義
 pub struct Runtime {
@@ -117,7 +117,8 @@ impl Runtime {
     }
 
     pub fn run_queue(&self) {
-        while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
+        // while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
+        loop
         {
             tracing::trace!("event loop task_receiver: {:?}", self.task_receiver.len());
 
@@ -129,10 +130,10 @@ impl Runtime {
                 polling_tasks.push(task);
             }
             for task in polling_tasks {
-                tracing::trace!(
-                    "polling_task_receiver processing task, remaining tasks: {:?}",
-                    self.polling_task_receiver.len()
-                );
+                // tracing::debug!(
+                //     "polling_task_receiver processing task, remaining tasks: {:?}",
+                //     self.polling_task_receiver.len()
+                // );
                 let _ = task.poll_task();
             }
 

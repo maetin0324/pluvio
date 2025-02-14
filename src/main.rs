@@ -20,6 +20,7 @@ fn main() {
     let runtime = Runtime::new(256);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
+        runtime.clone().spawn_polling(polling());
         let file = File::options()
             .read(true)
             .write(true)
@@ -68,8 +69,8 @@ fn main() {
             reactor.clone(),
         ));
         p().await;
-        let c = runtime.clone().spawn_polling(CountFuture::new(1000)).await.unwrap();
-        tracing::debug!("CountFuture completed, count: {}", c);
+        // let c = runtime.clone().spawn_polling(CountFuture::new(1000)).await.unwrap();
+        // tracing::debug!("CountFuture completed, count: {}", c);
         let (ret1, ret2) = futures::join!(h1, h2);
         tracing::debug!("WriteFileFuture completed, ret1 {} bytes, ret2 {} bytes", ret1.unwrap().unwrap(), ret2.unwrap().unwrap());
         // tracing::debug!("BackTrace: {:#?}", std::backtrace::Backtrace::force_capture());
@@ -78,6 +79,11 @@ fn main() {
 
 async fn p() {
     println!("Hello, world!");
+}
+
+async fn polling() {
+    tracing::info!("polling");
+    futures_lite::future::yield_now().await;
 }
 
 pub struct CountFuture {
