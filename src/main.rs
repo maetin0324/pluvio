@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 use io_uring::types;
+use std::os::unix::fs::OpenOptionsExt;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use ucio::executor::Runtime;
 use ucio::future::{ReadFileFuture, WriteFileFuture};
@@ -8,82 +9,51 @@ use ucio::future::{ReadFileFuture, WriteFileFuture};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+static TOTAL_SIZE: usize = 16 * 1024 * 1024 * 1024;
+static BUFFER_SIZE: usize = 1024 * 1024;
+
 fn main() {
     tracing_subscriber::registry()
-    .with(
-      tracing_subscriber::EnvFilter::try_from_default_env()
-      .unwrap_or_else(|_| "Debug".into())
-    )
-    .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
-    .init();
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "Info".into()),
+        )
+        .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
+        .init();
 
-    let runtime = Runtime::new(256);
+    let runtime = Runtime::new(4096, 1024, 10);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
-        runtime.clone().spawn_polling(polling());
+        let now = std::time::Instant::now();
         let file = File::options()
+            .create(true)
+            .truncate(true)
             .read(true)
             .write(true)
-            .create(true)
-            .open("example.txt")
+            .custom_flags(libc::O_DIRECT)
+            .open("/local/rmaeda/tmp/ucio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
-        let read_buffer1 = vec![0u8; 256];
-        let read_buffer2 = vec![0u8; 512];
-        let read_offset1 = 0;
-        let read_offset2 = 256;
-
-        let write_buffer1 = vec![0x41u8; 1 * 1024 * 1024 * 1024];
-        let write_buffer2 = vec![0x42u8; 1 * 1024 * 1024 * 1024];
-        let write_offset1 = 0;
-        let write_offset2 = 1 * 1024 * 1024 * 1024;
-
-        ReadFileFuture::new(
-            types::Fd(fd),
-            read_buffer1,
-            read_offset1,
-            reactor.clone(),
-        ).await.unwrap();
-        ReadFileFuture::new(
-            types::Fd(fd),
-            read_buffer2,
-            read_offset2,
-            reactor.clone(),
-        ).await.unwrap();
-
-        tracing::debug!("ReadFileFuture completed");
-        tracing::debug!("main runtime queue: {:?}", runtime.clone().task_receiver.len());
-        tracing::debug!("main reactor queue: {:?}", reactor.clone().completions.lock().unwrap());
-
-        let h1 = runtime.clone().spawn(WriteFileFuture::new(
-            types::Fd(fd),
-            write_buffer1,
-            write_offset1,
-            reactor.clone(),
-        ));
-        let h2 = runtime.clone().spawn(WriteFileFuture::new(
-            types::Fd(fd),
-            write_buffer2,
-            write_offset2,
-            reactor.clone(),
-        ));
-        p().await;
-        // let c = runtime.clone().spawn_polling(CountFuture::new(1000)).await.unwrap();
-        // tracing::debug!("CountFuture completed, count: {}", c);
-        let (ret1, ret2) = futures::join!(h1, h2);
-        tracing::debug!("WriteFileFuture completed, ret1 {} bytes, ret2 {} bytes", ret1.unwrap().unwrap(), ret2.unwrap().unwrap());
-        // tracing::debug!("BackTrace: {:#?}", std::backtrace::Backtrace::force_capture());
+        let mut handles = Vec::new();
+        for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
+            let buffer = vec![0; BUFFER_SIZE];
+            let reactor = reactor.clone();
+            let handle = runtime.clone().spawn(WriteFileFuture::new(
+                fd,
+                buffer.clone(),
+                (i * BUFFER_SIZE) as u64,
+                reactor.clone(),
+            ));
+            handles.push(handle);
+        }
+        futures::future::join_all(handles).await;
+        tracing::info!("write done: {:?}", now.elapsed());
     });
 }
 
-async fn p() {
+async fn _p() {
     println!("Hello, world!");
-}
-
-async fn polling() {
-    tracing::info!("polling");
-    futures_lite::future::yield_now().await;
 }
 
 pub struct CountFuture {
@@ -94,8 +64,8 @@ pub struct CountFuture {
 impl CountFuture {
     pub fn new(complete_count: u32) -> Self {
         CountFuture {
-        count: 0,
-        complete_count,
+            count: 0,
+            complete_count,
         }
     }
 }
@@ -103,7 +73,10 @@ impl CountFuture {
 impl std::future::Future for CountFuture {
     type Output = u32;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
         this.count += 1;
         if this.count < this.complete_count {

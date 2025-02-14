@@ -87,18 +87,15 @@ where
 
         match future_slot.as_mut().poll(&mut context) {
             Poll::Pending => {
-                tracing::trace!("TaskTrait::poll_task Poll::Pending");
                 Poll::Pending
             }
             Poll::Ready(t) => {
-                tracing::trace!("TaskTrait::poll_task Poll::Ready");
                 Poll::Ready(t)
             }
         }
     }
 
     fn schedule(self: Arc<Self>) {
-        tracing::trace!("TaskTrait::schedule");
         self.task_sender
             .send(self.clone())
             .expect("Failed to send task");
@@ -130,7 +127,6 @@ unsafe fn wake_by_ref_raw<T>(data: *const ())
 where
     T: 'static,
 {
-    tracing::trace!("wake_by_ref_raw");
     let arc: Arc<Task<T>> = Arc::from_raw(data as *const Task<T>);
     Arc::clone(&arc).schedule();
     let _ = Arc::into_raw(arc);

@@ -1,6 +1,7 @@
 use std::{
     future::Future,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -17,8 +18,12 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(queue_size: u32) -> Arc<Self> {
-        let reactor = Arc::new(Reactor::new(queue_size));
+    pub fn new(queue_size: u32, submit_depth: u32, wait_timeout: u64) -> Arc<Self> {
+        let reactor = Arc::new(Reactor::new(
+            queue_size,
+            submit_depth,
+            Duration::from_millis(wait_timeout),
+        ));
         let (task_sender, task_receiver) = unbounded();
         let (polling_task_sender, polling_task_receiver) = unbounded();
         Arc::new(Runtime {
@@ -54,11 +59,9 @@ impl Runtime {
                 *result = Some(Ok(res));
             }
             if let Some(waker) = shared_clone.lock().unwrap().waker.lock().unwrap().take() {
-                tracing::trace!("Runtime::spawn wake");
                 waker.wake();
             }
         };
-        tracing::trace!("Runtime::spawn wrapped_future");
         let task = Arc::new(Task {
             future: Arc::new(Mutex::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
@@ -68,7 +71,6 @@ impl Runtime {
         // タスクをキューに送信
         self.task_sender.send(task).expect("Failed to send task");
 
-        tracing::trace!("Runtime::spawn task_sent, return handle");
         handle
     }
 
@@ -117,10 +119,9 @@ impl Runtime {
     }
 
     pub fn run_queue(&self) {
-        // while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
-        loop
+        while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
         {
-            tracing::trace!("event loop task_receiver: {:?}", self.task_receiver.len());
+            // loop {
 
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
@@ -138,12 +139,11 @@ impl Runtime {
             }
 
             if let Ok(task) = self.task_receiver.try_recv() {
-                tracing::trace!("task_receiver: {:?}", self.task_receiver.len());
                 let _ = task.poll_task();
             }
 
             // Reactor の完了イベントをポーリング
-            self.reactor.poll_completions();
+            self.reactor.poll_submit_and_completions();
 
             // イベントループの待機（適宜調整）
             // std::thread::sleep(std::time::Duration::from_millis(10));

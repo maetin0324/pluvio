@@ -9,14 +9,14 @@ use std::task::{Context, Poll};
 
 pub struct ReadFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
-    fd: types::Fd,
+    fd: i32,
     buffer: Vec<u8>,
     offset: u64,
     reactor: Arc<Reactor>,
 }
 
 impl ReadFileFuture {
-    pub fn new(fd: types::Fd, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
+    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
         ReadFileFuture {
             shared_state: Arc::new(Mutex::new(SharedState::new())),
             fd,
@@ -48,7 +48,7 @@ impl Future for ReadFileFuture {
             // SQE の取得
             let sqe = {
                 io_uring::opcode::Read::new(
-                    this.fd,
+                    types::Fd(this.fd),
                     this.buffer.as_mut_ptr(),
                     this.buffer.len() as u32,
                 )
@@ -80,14 +80,14 @@ impl Future for ReadFileFuture {
 
 pub struct WriteFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
-    fd: types::Fd,
+    fd: i32,
     buffer: Vec<u8>,
     offset: u64,
     reactor: Arc<Reactor>,
 }
 
 impl WriteFileFuture {
-    pub fn new(fd: types::Fd, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
+    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Arc<Reactor>) -> Self {
         WriteFileFuture {
             shared_state: Arc::new(Mutex::new(SharedState::new())),
             fd,
@@ -107,10 +107,7 @@ impl Future for WriteFileFuture {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.lock().unwrap().take() {
-            eprintln!(
-                "WriteFileFuture completed, wrtired {} bytes",
-                this.buffer.len()
-            );
+            tracing::trace!("WriteFileFuture completed, wrote {} bytes", this.buffer.len());
             return Poll::Ready(result);
         }
 
@@ -122,7 +119,7 @@ impl Future for WriteFileFuture {
             // SQE の準備
             let sqe = {
                 io_uring::opcode::Write::new(
-                    this.fd,
+                    types::Fd(this.fd),
                     this.buffer.as_ptr() as *const _,
                     this.buffer.len() as u32,
                 )
