@@ -31,7 +31,7 @@ fn main() {
             .read(true)
             .write(true)
             .custom_flags(libc::O_DIRECT)
-            .open("/local/rmaeda/tmp/ucio_test.txt")
+            .open("/scr/rmaeda/tmp/ucio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
