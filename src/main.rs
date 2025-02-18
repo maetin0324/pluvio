@@ -9,7 +9,7 @@ use ucio::future::{ReadFileFuture, WriteFileFuture};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 16 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 32 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 1024 * 1024;
 
 fn main() {
@@ -21,7 +21,7 @@ fn main() {
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(4096, 1024, 10);
+    let runtime = Runtime::new(4096, 1024, 100);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
         let now = std::time::Instant::now();
@@ -49,9 +49,7 @@ fn main() {
         }
         futures::future::join_all(handles).await.iter().for_each(|result| {
             match result {
-                Ok(_) => {
-                    tracing::info!("write done");
-                }
+                Ok(_) => {}
                 Err(e) => {
                     tracing::error!("write error: {:?}", e);
                 }
