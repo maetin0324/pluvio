@@ -48,7 +48,14 @@ fn main() {
             handles.push(handle);
         }
         futures::future::join_all(handles).await.iter().for_each(|result| {
-            tracing::warn!("write done: {:?}", result);
+            match result {
+                Ok(_) => {
+                    tracing::info!("write done");
+                }
+                Err(e) => {
+                    tracing::error!("write error: {:?}", e);
+                }
+            }
         });
         tracing::info!("write done: {:?}", now.elapsed());
     });
