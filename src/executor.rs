@@ -119,9 +119,9 @@ impl Runtime {
     }
 
     pub fn run_queue(&self) {
-        while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
-        {
-            // loop {
+        // while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
+        // {
+        loop {
 
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理

@@ -30,7 +30,7 @@ impl Reactor {
     pub fn new(queue_size: u32, submit_depth: u32, wait_timeout: Duration) -> Self {
         // let ring = IoUring::new(queue_size).expect("Failed to create io_uring");
         let ring = IoUring::builder()
-            .setup_iopoll()
+            // .setup_iopoll()
             .build(queue_size)
             .expect("Failed to create io_uring");
         Reactor {
@@ -75,13 +75,15 @@ impl Reactor {
             last.elapsed()
         };
 
-        if submission.len() >= self.io_uring_params.submit_depth as usize
+        let submission_len = submission.len();
+        if submission_len >= self.io_uring_params.submit_depth as usize
             || (!submission.is_empty() && elapsed >= self.io_uring_params.wait_timeout)
         {
-            tracing::debug!("submitted {} SQEs", submission.len());
+            tracing::trace!("submitted {} SQEs", submission.len());
             drop(submission);
             // SQE の送信
             ring.submit().expect("Failed to submit SQE");
+            // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
             let mut last = self.last_submit_time.borrow_mut();
             *last = Instant::now();
