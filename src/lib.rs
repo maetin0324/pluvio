@@ -1,5 +1,5 @@
 pub mod executor;
-pub mod future;
+pub mod io;
 pub mod reactor;
 pub mod task;
 
