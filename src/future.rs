@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::vec;
 
 pub struct ReadFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
@@ -107,7 +108,10 @@ impl Future for WriteFileFuture {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.lock().unwrap().take() {
-            tracing::trace!("WriteFileFuture completed, wrote {} bytes", this.buffer.len());
+            tracing::trace!(
+                "WriteFileFuture completed, wrote {} bytes",
+                this.buffer.len()
+            );
             return Poll::Ready(result);
         }
 

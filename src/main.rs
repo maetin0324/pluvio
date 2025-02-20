@@ -9,19 +9,18 @@ use ucio::future::{ReadFileFuture, WriteFileFuture};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 32 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 1 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 1024 * 1024;
 
 fn main() {
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "Info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "Info".into()),
         )
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(4096, 1024, 100);
+    let runtime = Runtime::new(1024, 64, 100);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
         let now = std::time::Instant::now();
@@ -37,7 +36,7 @@ fn main() {
 
         let mut handles = Vec::new();
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            let buffer = vec![0; BUFFER_SIZE];
+            let buffer = vec![0x61; BUFFER_SIZE];
             let reactor = reactor.clone();
             let handle = runtime.clone().spawn(WriteFileFuture::new(
                 fd,
@@ -47,14 +46,15 @@ fn main() {
             ));
             handles.push(handle);
         }
-        futures::future::join_all(handles).await.iter().for_each(|result| {
-            match result {
+        futures::future::join_all(handles)
+            .await
+            .iter()
+            .for_each(|result| match result {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::error!("write error: {:?}", e);
                 }
-            }
-        });
+            });
         tracing::info!("write done: {:?}", now.elapsed());
     });
 }
