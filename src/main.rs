@@ -4,12 +4,12 @@ use io_uring::types;
 use std::os::unix::fs::OpenOptionsExt;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use ucio::executor::Runtime;
-use ucio::future::{ReadFileFuture, WriteFileFuture};
+use ucio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 1 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 128 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 1024 * 1024;
 
 fn main() {
@@ -20,7 +20,7 @@ fn main() {
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(1024, 64, 100);
+    let runtime = Runtime::new(1024, BUFFER_SIZE, 64, 100);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
         let now = std::time::Instant::now();
@@ -30,20 +30,34 @@ fn main() {
             .read(true)
             .write(true)
             .custom_flags(libc::O_DIRECT)
-            .open("/scr/rmaeda/tmp/ucio_test.txt")
+            .open("/scr/ucio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
+        runtime.register_file(fd);
+
         let mut handles = Vec::new();
+        // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
+        //     let buffer = vec![0x61; BUFFER_SIZE];
+        //     let reactor = reactor.clone();
+        //     let handle = runtime.clone().spawn(WriteFileFuture::new(
+        //         fd,
+        //         buffer.clone(),
+        //         (i * BUFFER_SIZE) as u64,
+        //         reactor.clone(),
+        //     ));
+        //     handles.push(handle);
+        // }
+
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            let buffer = vec![0x61; BUFFER_SIZE];
+            let buffer = prepare_buffer(runtime.clone().allocator.clone());
+            // tracing::debug!("fill buffer with 0x61");
+            // buffer.as_mut_slice().fill(0x61);
             let reactor = reactor.clone();
-            let handle = runtime.clone().spawn(WriteFileFuture::new(
-                fd,
-                buffer.clone(),
-                (i * BUFFER_SIZE) as u64,
-                reactor.clone(),
-            ));
+            let offset = (i * BUFFER_SIZE) as u64;
+            let handle = runtime
+                .clone()
+                .spawn(write_fixed(fd, offset, buffer, reactor));
             handles.push(handle);
         }
         futures::future::join_all(handles)
@@ -56,6 +70,8 @@ fn main() {
                 }
             });
         tracing::info!("write done: {:?}", now.elapsed());
+        tracing::info!("bandwidth: {:?}MiB/s", (TOTAL_SIZE / 1024 / 1024) as f64 / now.elapsed().as_secs_f64());
+        std::process::exit(0);
     });
 }
 

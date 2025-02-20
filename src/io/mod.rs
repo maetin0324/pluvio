@@ -1,12 +1,17 @@
 use crate::reactor::Reactor;
 use crate::task::SharedState;
+use allocator::{FixedBufferAllocator, WriteFixedBuffer};
+use io_uring::opcode::Write;
 use io_uring::types;
 use std::future::Future;
 // use std::io::Result;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::vec;
+
+pub mod allocator;
 
 pub struct ReadFileFuture {
     shared_state: Arc<Mutex<SharedState<usize>>>,
@@ -150,4 +155,64 @@ impl Future for WriteFileFuture {
         shared.waker = Mutex::new(Some(cx.waker().clone()));
         Poll::Pending
     }
+}
+
+pub struct WriteFixedFuture {
+    shared_state: Arc<Mutex<SharedState<usize>>>,
+    sqe: io_uring::squeue::Entry,
+    reactor: Arc<Reactor>,
+}
+
+impl WriteFixedFuture {
+    pub fn new(sqe: io_uring::squeue::Entry, reactor: Arc<Reactor>) -> Self {
+        WriteFixedFuture {
+            shared_state: Arc::new(Mutex::new(SharedState::new())),
+            sqe,
+            reactor,
+        }
+    }
+}
+
+
+impl Future for WriteFixedFuture {
+    type Output = Result<usize, String>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut shared = this.shared_state.lock().unwrap();
+
+        // 既に結果がある場合は Ready を返す
+        if let Some(result) = shared.result.lock().unwrap().take() {
+            return Poll::Ready(result);
+        }
+
+        // I/O 操作をまだ登録していない場合、登録する
+        if shared.waker.lock().unwrap().is_none() {
+            // Reactor に SharedState を登録し、user_data を取得
+            let user_data = this.reactor.register_io(this.shared_state.clone());
+
+            // SQE の準備
+            let sqe = std::mem::replace(&mut this.sqe, io_uring::opcode::Nop::new().build());
+
+            // Write 操作を準備
+            let sqe = sqe.user_data(user_data);
+
+            // I/O 操作を送信
+            this.reactor.submit_io(sqe, user_data);
+        }
+
+        // Waker を保存してタスクを再開可能にする
+        shared.waker = Mutex::new(Some(cx.waker().clone()));
+        Poll::Pending
+    }
+}
+
+pub fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> WriteFixedBuffer {
+    let buffer = allocator.acquire().unwrap();
+    buffer
+}
+
+pub fn write_fixed(fd: i32, offset: u64, buffer: WriteFixedBuffer, reactor: Arc<Reactor>) -> WriteFixedFuture {
+    let sqe = buffer.prepare_sqe(fd, offset);
+    WriteFixedFuture::new(sqe, reactor)
 }

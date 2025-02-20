@@ -1,12 +1,8 @@
 use std::{
-    cell::RefCell,
-    collections::HashMap,
-    io::Error,
-    sync::{
+    cell::RefCell, collections::HashMap, io::Error, os::fd, sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
-    },
-    time::{Duration, Instant},
+    }, time::{Duration, Instant}
 };
 
 use io_uring::IoUring;
@@ -127,5 +123,10 @@ impl Reactor {
     pub fn is_empty(&self) -> bool {
         let completions = self.completions.lock().unwrap();
         completions.is_empty()
+    }
+
+    pub fn register_file(&self, fd: i32) {
+        let ring = self.ring.lock().unwrap();
+        ring.submitter().register_files(&[fd]).expect("Failed to register file");
     }
 }

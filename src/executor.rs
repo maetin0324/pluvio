@@ -1,12 +1,17 @@
 use std::{
     future::Future,
+    rc::Rc,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::{reactor::Reactor, task::JoinHandle, task::SharedState, task::Task, task::TaskTrait};
+use crate::{
+    io::allocator::FixedBufferAllocator,
+    reactor::Reactor,
+    task::{JoinHandle, SharedState, Task, TaskTrait},
+};
 
 // Runtime の定義
 pub struct Runtime {
@@ -15,15 +20,26 @@ pub struct Runtime {
     polling_task_sender: Sender<Arc<dyn TaskTrait>>,
     pub task_receiver: Receiver<Arc<dyn TaskTrait>>,
     pub polling_task_receiver: Receiver<Arc<dyn TaskTrait>>,
+    pub allocator: Rc<FixedBufferAllocator>,
 }
 
 impl Runtime {
-    pub fn new(queue_size: u32, submit_depth: u32, wait_timeout: u64) -> Arc<Self> {
+    pub fn new(
+        queue_size: u32,
+        buffer_size: usize,
+        submit_depth: u32,
+        wait_timeout: u64,
+    ) -> Arc<Self> {
         let reactor = Arc::new(Reactor::new(
             queue_size,
             submit_depth,
             Duration::from_millis(wait_timeout),
         ));
+        let allocator = FixedBufferAllocator::new(
+            queue_size as usize,
+            buffer_size,
+            &mut reactor.ring.lock().unwrap(),
+        );
         let (task_sender, task_receiver) = unbounded();
         let (polling_task_sender, polling_task_receiver) = unbounded();
         Arc::new(Runtime {
@@ -32,6 +48,7 @@ impl Runtime {
             polling_task_sender,
             task_receiver,
             polling_task_receiver,
+            allocator,
         })
     }
 
@@ -122,7 +139,6 @@ impl Runtime {
         // while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
         // {
         loop {
-
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
             // polling_task_receiverにあるタスクを一度に取り出して処理
@@ -157,5 +173,9 @@ impl Runtime {
     {
         self.spawn(future);
         self.run_queue();
+    }
+
+    pub fn register_file(&self, fd: i32) {
+        self.reactor.register_file(fd);
     }
 }
