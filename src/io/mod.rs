@@ -3,6 +3,7 @@ use crate::task::SharedState;
 use allocator::{FixedBufferAllocator, WriteFixedBuffer};
 use io_uring::opcode::Write;
 use io_uring::types;
+use std::cell::RefCell;
 use std::future::Future;
 // use std::io::Result;
 use std::pin::Pin;
@@ -207,8 +208,8 @@ impl Future for WriteFixedFuture {
     }
 }
 
-pub fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> WriteFixedBuffer {
-    let buffer = allocator.acquire().unwrap();
+pub fn prepare_buffer(mut allocator: Rc<FixedBufferAllocator>) -> Option<WriteFixedBuffer> {
+    let buffer = allocator.acquire();
     buffer
 }
 

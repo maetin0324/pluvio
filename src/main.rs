@@ -50,7 +50,7 @@ fn main() {
         // }
 
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            let buffer = prepare_buffer(runtime.clone().allocator.clone());
+            let buffer = prepare_buffer(runtime.clone().allocator.clone()).unwrap();
             // tracing::debug!("fill buffer with 0x61");
             // buffer.as_mut_slice().fill(0x61);
             let reactor = reactor.clone();
