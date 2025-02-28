@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell, future::Future, rc::Rc, sync::{Arc, Mutex}, time::Duration
+    cell::RefCell, future::Future, rc::Rc, time::Duration
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -12,11 +12,11 @@ use crate::{
 
 // Runtime の定義
 pub struct Runtime {
-    pub reactor: Arc<Reactor>,
-    task_sender: Sender<Arc<dyn TaskTrait>>,
-    polling_task_sender: Sender<Arc<dyn TaskTrait>>,
-    pub task_receiver: Receiver<Arc<dyn TaskTrait>>,
-    pub polling_task_receiver: Receiver<Arc<dyn TaskTrait>>,
+    pub reactor: Rc<Reactor>,
+    task_sender: Sender<Rc<dyn TaskTrait>>,
+    polling_task_sender: Sender<Rc<dyn TaskTrait>>,
+    pub task_receiver: Receiver<Rc<dyn TaskTrait>>,
+    pub polling_task_receiver: Receiver<Rc<dyn TaskTrait>>,
     pub allocator: Rc<FixedBufferAllocator>,
 }
 
@@ -26,8 +26,8 @@ impl Runtime {
         buffer_size: usize,
         submit_depth: u32,
         wait_timeout: u64,
-    ) -> Arc<Self> {
-        let reactor = Arc::new(Reactor::new(
+    ) -> Rc<Self> {
+        let reactor = Rc::new(Reactor::new(
             queue_size,
             submit_depth,
             Duration::from_millis(wait_timeout),
@@ -35,11 +35,11 @@ impl Runtime {
         let allocator = FixedBufferAllocator::new(
             queue_size as usize,
             buffer_size,
-            &mut reactor.ring.lock().unwrap(),
+            &mut reactor.ring.borrow_mut(),
         );
         let (task_sender, task_receiver) = unbounded();
         let (polling_task_sender, polling_task_receiver) = unbounded();
-        Arc::new(Runtime {
+        Rc::new(Runtime {
             reactor,
             task_sender,
             polling_task_sender,
@@ -54,9 +54,9 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Arc::new(Mutex::new(SharedState::<T> {
-            result: Mutex::new(None),
-            waker: Mutex::new(None),
+        let shared = Rc::new(RefCell::new(SharedState::<T> {
+            result: RefCell::new(None),
+            waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
@@ -68,16 +68,16 @@ impl Runtime {
         let wrapped_future = async move {
             let res = future.await;
             {
-                let binding = shared_clone.lock().unwrap();
-                let mut result = binding.result.lock().unwrap();
+                let binding = shared_clone.borrow_mut();
+                let mut result = binding.result.borrow_mut();
                 *result = Some(Ok(res));
             }
-            if let Some(waker) = shared_clone.lock().unwrap().waker.lock().unwrap().take() {
+            if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 waker.wake();
             }
         };
-        let task = Arc::new(Task {
-            future: Arc::new(Mutex::new(Box::pin(wrapped_future))),
+        let task = Rc::new(Task {
+            future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
             shared_state: shared,
         });
@@ -93,9 +93,9 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Arc::new(Mutex::new(SharedState::<T> {
-            result: Mutex::new(None),
-            waker: Mutex::new(None),
+        let shared = Rc::new(RefCell::new(SharedState::<T> {
+            result: RefCell::new(None),
+            waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
@@ -107,18 +107,18 @@ impl Runtime {
         let wrapped_future = async move {
             let res = future.await;
             {
-                let binding = shared_clone.lock().unwrap();
-                let mut result = binding.result.lock().unwrap();
+                let binding = shared_clone.borrow_mut();
+                let mut result = binding.result.borrow_mut();
                 *result = Some(Ok(res));
             }
-            if let Some(waker) = shared_clone.lock().unwrap().waker.lock().unwrap().take() {
+            if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 tracing::trace!("Runtime::spawn wake");
                 waker.wake();
             }
         };
         tracing::trace!("Runtime::spawn wrapped_future");
-        let task = Arc::new(Task {
-            future: Arc::new(Mutex::new(Box::pin(wrapped_future))),
+        let task = Rc::new(Task {
+            future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.polling_task_sender.clone(),
             shared_state: shared,
         });
@@ -133,7 +133,7 @@ impl Runtime {
     }
 
     pub fn run_queue(&self) {
-        // while !self.task_receiver.is_empty() || !self.reactor.completions.lock().unwrap().is_empty()
+        // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
         // {
         loop {
             // yield_nowされたタスクが入ると無限ループしてしまうので

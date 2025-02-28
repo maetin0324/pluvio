@@ -1,8 +1,5 @@
 use std::{
-    cell::RefCell, collections::HashMap, io::Error, os::fd, sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    }, time::{Duration, Instant}
+    cell::RefCell, collections::HashMap, io::Error, os::fd, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}
 };
 
 use io_uring::IoUring;
@@ -10,8 +7,8 @@ use io_uring::IoUring;
 use crate::task::SharedState;
 
 pub struct Reactor {
-    pub ring: Arc<Mutex<IoUring>>,
-    pub completions: Arc<Mutex<HashMap<u64, Arc<Mutex<SharedState<usize>>>>>>,
+    pub ring: Rc<RefCell<IoUring>>,
+    pub completions: Rc<RefCell<HashMap<u64, Rc<RefCell<SharedState<usize>>>>>>,
     pub user_data_counter: AtomicU64,
     last_submit_time: RefCell<std::time::Instant>,
     io_uring_params: IoUringParams,
@@ -30,8 +27,8 @@ impl Reactor {
             .build(queue_size)
             .expect("Failed to create io_uring");
         Reactor {
-            ring: Arc::new(Mutex::new(ring)),
-            completions: Arc::new(Mutex::new(HashMap::new())),
+            ring: Rc::new(RefCell::new(ring)),
+            completions: Rc::new(RefCell::new(HashMap::new())),
             user_data_counter: AtomicU64::new(1),
             last_submit_time: RefCell::new(std::time::Instant::now()),
             io_uring_params: IoUringParams {
@@ -42,9 +39,9 @@ impl Reactor {
     }
 
     /// I/O 操作を登録し、対応する SharedState をマッピングに追加します。
-    pub fn register_io(&self, shared_state: Arc<Mutex<SharedState<usize>>>) -> u64 {
+    pub fn register_io(&self, shared_state: Rc<RefCell<SharedState<usize>>>) -> u64 {
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
-        let mut completions = self.completions.lock().unwrap();
+        let mut completions = self.completions.borrow_mut();
         completions.insert(user_data, shared_state);
         user_data
     }
@@ -52,7 +49,7 @@ impl Reactor {
     /// I/O 操作を送信します。
     pub fn submit_io(&self, sqe: io_uring::squeue::Entry, user_data: u64) {
         tracing::trace!("Reactor::submit_io user_data: {}", user_data);
-        let mut ring = self.ring.lock().unwrap();
+        let mut ring = self.ring.borrow_mut();
         unsafe {
             let sqe = sqe.user_data(user_data);
             ring.submission()
@@ -63,7 +60,7 @@ impl Reactor {
 
     /// 完了キューをポーリングし、完了した I/O 操作を処理します。
     pub fn poll_submit_and_completions(&self) {
-        let mut ring = self.ring.lock().unwrap();
+        let mut ring = self.ring.borrow_mut();
         let submission = ring.submission();
 
         let elapsed = {
@@ -94,23 +91,23 @@ impl Reactor {
 
             // マッピングから SharedState を取得
             let shared_state_opt = {
-                let mut completions = self.completions.lock().unwrap();
+                let mut completions = self.completions.borrow_mut();
                 completions.remove(&user_data)
             };
 
             if let Some(shared_state) = shared_state_opt {
-                let mut shared = shared_state.lock().unwrap();
+                let mut shared = shared_state.borrow_mut();
                 if cqe.result() >= 0 {
-                    shared.result = Mutex::new(Some(Ok(cqe.result() as usize)));
+                    shared.result = RefCell::new(Some(Ok(cqe.result() as usize)));
                 } else {
                     // エラーハンドリング
-                    shared.result = Mutex::new(Some(Err(
+                    shared.result = RefCell::new(Some(Err(
                         Error::from_raw_os_error(-cqe.result()).to_string()
                     )));
                 }
 
                 // Waker を呼び出してタスクを再開
-                let waker_opt = shared.waker.lock().unwrap().take();
+                let waker_opt = shared.waker.borrow_mut().take();
                 if let Some(waker) = waker_opt {
                     waker.wake();
                 }
@@ -121,12 +118,12 @@ impl Reactor {
     }
 
     pub fn is_empty(&self) -> bool {
-        let completions = self.completions.lock().unwrap();
+        let completions = self.completions.borrow_mut();
         completions.is_empty()
     }
 
     pub fn register_file(&self, fd: i32) {
-        let ring = self.ring.lock().unwrap();
+        let ring = self.ring.borrow_mut();
         ring.submitter().register_files(&[fd]).expect("Failed to register file");
     }
 }
