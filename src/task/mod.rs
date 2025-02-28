@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable};
 use std::{future::Future, pin::Pin, task::Waker};
 // use std::io::Result;
@@ -80,7 +80,8 @@ where
         //             .expect("Failed to send task");
         //     }
         // });
-        let waker = new_waker(self.clone());
+        let weak = Rc::downgrade(&self);
+        let waker = new_waker(weak);
 
         let mut context = Context::from_waker(&waker);
         let mut future_slot = self.future.borrow_mut();
@@ -151,10 +152,10 @@ where
     )
 }
 
-fn new_waker<T>(task: Rc<Task<T>>) -> Waker
+fn new_waker<T>(task: Weak<Task<T>>) -> Waker
 where
     T: 'static,
 {
-    let raw = RawWaker::new(Rc::into_raw(task) as *const (), get_vtable::<T>());
+    let raw = RawWaker::new(Weak::into_raw(task) as *const (), get_vtable::<T>());
     unsafe { Waker::from_raw(raw) }
 }
