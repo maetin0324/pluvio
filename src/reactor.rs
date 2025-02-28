@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell, collections::HashMap, io::Error, os::fd, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}
+    cell::RefCell, collections::HashMap, io::Error, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}
 };
 
 use io_uring::IoUring;

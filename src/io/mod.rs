@@ -1,7 +1,6 @@
 use crate::reactor::Reactor;
 use crate::task::SharedState;
 use allocator::{FixedBufferAllocator, WriteFixedBuffer};
-use io_uring::opcode::Write;
 use io_uring::types;
 use std::cell::RefCell;
 use std::future::Future;
@@ -9,7 +8,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use std::vec;
 
 pub mod allocator;
 
