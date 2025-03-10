@@ -3,8 +3,8 @@
 use io_uring::types;
 use std::os::unix::fs::OpenOptionsExt;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
-use ucio::executor::Runtime;
-use ucio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
+use pluvio::executor::Runtime;
+use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
