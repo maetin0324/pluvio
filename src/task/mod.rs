@@ -80,8 +80,13 @@ where
         //             .expect("Failed to send task");
         //     }
         // });
-        let weak = Rc::downgrade(&self);
-        let waker = new_waker(weak);
+        let waker: Waker;
+        if let None = self.shared_state.borrow().waker.borrow().as_ref() {
+            let weak = Rc::downgrade(&self);
+            waker = new_waker(weak);
+        } else {
+            waker = self.shared_state.borrow().waker.borrow().as_ref().unwrap().clone();
+        }
 
         let mut context = Context::from_waker(&waker);
         let mut future_slot = self.future.borrow_mut();
