@@ -149,11 +149,11 @@ impl Runtime {
                 //     "polling_task_receiver processing task, remaining tasks: {:?}",
                 //     self.polling_task_receiver.len()
                 // );
-                let _ = task.poll_task();
+                task.poll_task();
             }
 
             if let Ok(task) = self.task_receiver.try_recv() {
-                let _ = task.poll_task();
+                task.poll_task();
             }
 
             // Reactor の完了イベントをポーリング

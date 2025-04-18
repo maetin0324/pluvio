@@ -9,7 +9,7 @@ use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 16 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 2 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 32 * 1024;
 
 fn main() {

@@ -60,8 +60,16 @@ pub struct Task<T: 'static> {
     pub shared_state: Rc<RefCell<SharedState<T>>>,
 }
 
+impl<T> Drop for Task<T> {
+    fn drop(&mut self) {
+        tracing::debug!("Task dropped");
+        // ここでタスクがドロップされたことを処理する
+        // 例えば、タスクをキャンセルするなど
+    }
+}
+
 pub trait TaskTrait {
-    fn poll_task(self: Rc<Self>) -> Poll<()>;
+    fn poll_task(self: Rc<Self>);
     fn schedule(self: Rc<Self>);
 }
 
@@ -69,36 +77,32 @@ impl<T> TaskTrait for Task<T>
 where
     T: 'static,
 {
-    fn poll_task(self: Rc<Self>) -> Poll<()> {
-        // let waker = waker_fn::waker_fn({
-        //     let task = self.clone();
-        //     move || {
-        //         tracing::trace!("TaskTrait::poll_task waker_fn");
-        //         // タスクを再スケジュール
-        //         task.task_sender
-        //             .send(task.clone())
-        //             .expect("Failed to send task");
-        //     }
-        // });
-        let waker: Waker;
-        if let None = self.shared_state.borrow().waker.borrow().as_ref() {
-            let weak = Rc::downgrade(&self);
-            waker = new_waker(weak);
-        } else {
-            waker = self.shared_state.borrow().waker.borrow().as_ref().unwrap().clone();
-        }
+    fn poll_task(self: Rc<Self>) {
+        // let waker: Waker;
+        // if let None = self.shared_state.borrow().waker.borrow().as_ref() {
+        //     let weak = Rc::downgrade(&self);
+        //     waker = new_waker(weak);
+        // } else {
+        //     waker = self.shared_state.borrow().waker.borrow().as_ref().unwrap().clone();
+        // }
+
+        let waker = new_waker(Rc::downgrade(&self));
 
         let mut context = Context::from_waker(&waker);
-        let mut future_slot = self.future.borrow_mut();
+        let mut future_slot = match self.future.try_borrow_mut() {
+            Ok(future) => future,
+            Err(_) => {
+                tracing::warn!("Failed to borrow future");
+                self.clone().schedule();
+                return;
+            }
+        };
 
-        match future_slot.as_mut().poll(&mut context) {
-            Poll::Pending => {
-                Poll::Pending
-            }
-            Poll::Ready(t) => {
-                Poll::Ready(t)
-            }
-        }
+        // let _ = future_slot.as_mut().poll(&mut context);
+        if let Poll::Pending = future_slot.as_mut().poll(&mut context) {
+            drop(future_slot);
+            std::mem::forget(self)
+        } 
     }
 
     fn schedule(self: Rc<Self>) {
@@ -112,11 +116,11 @@ unsafe fn clone_raw<T>(data: *const ()) -> RawWaker
 where
     T: 'static,
 {
-    let rc: Rc<Task<T>> = Rc::from_raw(data as *const Task<T>);
+    let rc: Weak<Task<T>> = Weak::from_raw(data as *const Task<T>);
     let rc_clone = rc.clone();
-    let ptr = Rc::into_raw(rc_clone) as *const ();
-    // 元のArcの参照カウントを戻す
-    let _ = Rc::into_raw(rc);
+    let ptr = Weak::into_raw(rc_clone) as *const ();
+    // rcのdropを防ぐ
+    std::mem::forget(rc);
     RawWaker::new(ptr, get_vtable::<T>())
 }
 
@@ -124,25 +128,28 @@ unsafe fn wake_raw<T>(data: *const ())
 where
     T: 'static,
 {
-    let rc: Rc<Task<T>> = Rc::from_raw(data as *const Task<T>);
+    let rc: Weak<Task<T>> = Weak::from_raw(data as *const Task<T>);
+    let rc = rc.upgrade().expect("Failed to upgrade weak reference");
     rc.schedule();
-    // arcはここでdropされる
 }
 
 unsafe fn wake_by_ref_raw<T>(data: *const ())
 where
     T: 'static,
 {
-    let rc: Rc<Task<T>> = Rc::from_raw(data as *const Task<T>);
-    Rc::clone(&rc).schedule();
-    let _ = Rc::into_raw(rc);
+    let rc: Weak<Task<T>> = Weak::from_raw(data as *const Task<T>);
+    Weak::clone(&rc)
+        .upgrade()
+        .expect("Failed to upgrade weak reference")
+        .schedule();
+    std::mem::forget(rc);
 }
 
 unsafe fn drop_raw<T>(data: *const ())
 where
     T: 'static,
 {
-    drop(Rc::<Task<T>>::from_raw(data as *const Task<T>));
+    drop(Weak::<Task<T>>::from_raw(data as *const Task<T>));
 }
 
 fn get_vtable<T>() -> &'static RawWakerVTable
@@ -163,4 +170,7 @@ where
 {
     let raw = RawWaker::new(Weak::into_raw(task) as *const (), get_vtable::<T>());
     unsafe { Waker::from_raw(raw) }
+}
+fn hoge() {
+    std::thread::sleep(std::time::Duration::from_secs(1));
 }
