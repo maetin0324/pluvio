@@ -245,6 +245,7 @@ dependencies = [
  "futures-lite",
  "io-uring",
  "libc",
+ "slab",
  "tracing",
  "tracing-subscriber",
  "waker-fn",

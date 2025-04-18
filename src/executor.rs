@@ -1,8 +1,9 @@
 use std::{
-    cell::RefCell, future::Future, rc::Rc, time::Duration
+    cell::RefCell, future::Future, rc::Rc, sync::atomic::AtomicU64, time::Duration
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use slab::Slab;
 
 use crate::{
     io::allocator::FixedBufferAllocator,
@@ -13,11 +14,13 @@ use crate::{
 // Runtime の定義
 pub struct Runtime {
     pub reactor: Rc<Reactor>,
-    task_sender: Sender<Rc<dyn TaskTrait>>,
-    polling_task_sender: Sender<Rc<dyn TaskTrait>>,
-    pub task_receiver: Receiver<Rc<dyn TaskTrait>>,
-    pub polling_task_receiver: Receiver<Rc<dyn TaskTrait>>,
+    task_sender: Sender<u64>,
+    polling_task_sender: Sender<u64>,
+    pub task_receiver: Receiver<u64>,
+    pub polling_task_receiver: Receiver<u64>,
+    pub task_pool: Slab<Box<dyn TaskTrait>>,
     pub allocator: Rc<FixedBufferAllocator>,
+    pub id_counter: AtomicU64,
 }
 
 impl Runtime {
@@ -40,13 +43,16 @@ impl Runtime {
         allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = unbounded();
         let (polling_task_sender, polling_task_receiver) = unbounded();
+        let task_pool = Slab::with_capacity(queue_size as usize);
         Rc::new(Runtime {
             reactor,
             task_sender,
             polling_task_sender,
             task_receiver,
             polling_task_receiver,
+            task_pool,
             allocator,
+            id_counter: AtomicU64::new(0),
         })
     }
 
@@ -77,14 +83,16 @@ impl Runtime {
                 waker.wake();
             }
         };
+        let id = self.id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let task = Rc::new(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
             shared_state: shared,
+            id,
         });
 
         // タスクをキューに送信
-        self.task_sender.send(task).expect("Failed to send task");
+        self.task_sender.send(task.id).expect("Failed to send task");
 
         handle
     }
@@ -117,16 +125,18 @@ impl Runtime {
                 waker.wake();
             }
         };
+        let id = self.id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         tracing::trace!("Runtime::spawn wrapped_future");
         let task = Rc::new(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.polling_task_sender.clone(),
             shared_state: shared,
+            id,
         });
 
         // タスクをキューに送信
         self.polling_task_sender
-            .send(task)
+            .send(task.id)
             .expect("Failed to send task");
 
         tracing::trace!("Runtime::spawn task_sent, return handle");

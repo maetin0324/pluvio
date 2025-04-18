@@ -55,16 +55,15 @@ impl<T> Future for JoinHandle<T> {
 
 // Task 構造体の定義
 pub struct Task<T: 'static> {
+    pub id: u64,
     pub future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
-    pub task_sender: Sender<Rc<dyn TaskTrait>>,
+    pub task_sender: Sender<u64>,
     pub shared_state: Rc<RefCell<SharedState<T>>>,
 }
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
         tracing::debug!("Task dropped");
-        // ここでタスクがドロップされたことを処理する
-        // 例えば、タスクをキャンセルするなど
     }
 }
 
@@ -77,7 +76,7 @@ impl<T> TaskTrait for Task<T>
 where
     T: 'static,
 {
-    fn poll_task(self: Rc<Self>) {
+    fn poll_task(self: Rc<Self>) -> std::task::Poll<()> {
         // let waker: Waker;
         // if let None = self.shared_state.borrow().waker.borrow().as_ref() {
         //     let weak = Rc::downgrade(&self);
@@ -94,20 +93,23 @@ where
             Err(_) => {
                 tracing::warn!("Failed to borrow future");
                 self.clone().schedule();
-                return;
+                return Poll::Pending;
             }
         };
 
         // let _ = future_slot.as_mut().poll(&mut context);
         if let Poll::Pending = future_slot.as_mut().poll(&mut context) {
             drop(future_slot);
-            std::mem::forget(self)
+            std::mem::forget(self);
+            Poll::Pending
+        } else {
+            Poll::Ready(())
         } 
     }
 
     fn schedule(self: Rc<Self>) {
         self.task_sender
-            .send(self.clone())
+            .send(self.id)
             .expect("Failed to send task");
     }
 }
@@ -170,7 +172,4 @@ where
 {
     let raw = RawWaker::new(Weak::into_raw(task) as *const (), get_vtable::<T>());
     unsafe { Waker::from_raw(raw) }
-}
-fn hoge() {
-    std::thread::sleep(std::time::Duration::from_secs(1));
 }
