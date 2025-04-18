@@ -26,7 +26,7 @@ impl FixedBufferAllocator {
     /// Creates a new allocator with `queue_size` buffers of `buffer_size` each.
     /// The buffers are registered with the provided `ring` as iovecs.
     pub fn new(queue_size: usize, buffer_size: usize, ring: &mut IoUring) -> Rc<Self> {
-        let mut buffers = Vec::with_capacity(queue_size * 1024 * 512);
+        let mut buffers = Vec::with_capacity(queue_size);
         for _ in 0..queue_size {
             let buf = aligned_alloc(buffer_size);
             buffers.push(RefCell::new(ManuallyDrop::new(buf)));
@@ -119,6 +119,15 @@ impl FixedBufferAllocator {
         let free = self.free_indices.borrow();
         let total = self.buffers.len();
         (total - free.len()) as f64 / total as f64 * 100.0
+    }
+
+    pub fn fill_buffers(&self, data: u8) {
+        for buf in self.buffers.iter() {
+            let mut buf = buf.borrow_mut();
+            for i in 0..buf.len() {
+                buf[i] = data;
+            }
+        }
     }
 }
 

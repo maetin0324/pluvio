@@ -9,8 +9,8 @@ use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 128 * 1024 * 1024 * 1024;
-static BUFFER_SIZE: usize = 1024 * 1024;
+static TOTAL_SIZE: usize = 2 * 1024 * 1024 * 1024;
+static BUFFER_SIZE: usize = 32 * 1024;
 
 fn main() {
     tracing_subscriber::registry()
@@ -29,8 +29,8 @@ fn main() {
             .truncate(true)
             .read(true)
             .write(true)
-            .custom_flags(libc::O_DIRECT)
-            .open("/scr/ucio_test.txt")
+            .custom_flags(libc::O_DIRECT | libc::O_SYNC)
+            .open("/local/rmaeda/ucio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
@@ -52,7 +52,6 @@ fn main() {
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
             let buffer = prepare_buffer(runtime.clone().allocator.clone()).unwrap();
             // tracing::debug!("fill buffer with 0x61");
-            // buffer.as_mut_slice().fill(0x61);
             let reactor = reactor.clone();
             let offset = (i * BUFFER_SIZE) as u64;
             let handle = runtime
