@@ -1,8 +1,9 @@
 use std::{
-    cell::RefCell, future::Future, rc::Rc, sync::atomic::AtomicU64, time::Duration
+    cell::RefCell, future::Future, rc::Rc, task::Poll, time::Duration
 };
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+// use crossbeam_channel::{unbounded, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use slab::Slab;
 
 use crate::{
@@ -14,13 +15,12 @@ use crate::{
 // Runtime の定義
 pub struct Runtime {
     pub reactor: Rc<Reactor>,
-    task_sender: Sender<u64>,
-    polling_task_sender: Sender<u64>,
-    pub task_receiver: Receiver<u64>,
-    pub polling_task_receiver: Receiver<u64>,
-    pub task_pool: Slab<Box<dyn TaskTrait>>,
+    task_sender: Sender<usize>,
+    polling_task_sender: Sender<usize>,
+    pub task_receiver: Receiver<usize>,
+    pub polling_task_receiver: Receiver<usize>,
+    pub task_pool: Rc<RefCell<Slab<Option<Box<dyn TaskTrait>>>>>,
     pub allocator: Rc<FixedBufferAllocator>,
-    pub id_counter: AtomicU64,
 }
 
 impl Runtime {
@@ -41,9 +41,9 @@ impl Runtime {
             &mut reactor.ring.borrow_mut(),
         );
         allocator.fill_buffers(0x61);
-        let (task_sender, task_receiver) = unbounded();
-        let (polling_task_sender, polling_task_receiver) = unbounded();
-        let task_pool = Slab::with_capacity(queue_size as usize);
+        let (task_sender, task_receiver) = channel();
+        let (polling_task_sender, polling_task_receiver) = channel();
+        let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
         Rc::new(Runtime {
             reactor,
             task_sender,
@@ -52,7 +52,6 @@ impl Runtime {
             polling_task_receiver,
             task_pool,
             allocator,
-            id_counter: AtomicU64::new(0),
         })
     }
 
@@ -83,16 +82,21 @@ impl Runtime {
                 waker.wake();
             }
         };
-        let id = self.id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let task = Rc::new(Task {
+        let task = Some(Box::new(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
             shared_state: shared,
-            id,
-        });
+        }) as Box<dyn TaskTrait>);
+
+        // タスクをスレッドプールに追加
+        let mut task_pool = self.task_pool.borrow_mut();
+        let task_id = task_pool.insert(task);
+        tracing::trace!("Runtime::spawn task_id: {}", task_id);
 
         // タスクをキューに送信
-        self.task_sender.send(task.id).expect("Failed to send task");
+        self.task_sender
+            .send(task_id)
+            .expect("Failed to send task");
 
         handle
     }
@@ -125,18 +129,21 @@ impl Runtime {
                 waker.wake();
             }
         };
-        let id = self.id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         tracing::trace!("Runtime::spawn wrapped_future");
-        let task = Rc::new(Task {
+        let task = Some(Box::new(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.polling_task_sender.clone(),
             shared_state: shared,
-            id,
-        });
+        }) as Box<dyn TaskTrait>);
+
+        // タスクをスレッドプールに追加
+        let mut task_pool = self.task_pool.borrow_mut();
+        let task_id = task_pool.insert(task);
+
 
         // タスクをキューに送信
         self.polling_task_sender
-            .send(task.id)
+            .send(task_id)
             .expect("Failed to send task");
 
         tracing::trace!("Runtime::spawn task_sent, return handle");
@@ -154,16 +161,25 @@ impl Runtime {
             while let Ok(task) = self.polling_task_receiver.try_recv() {
                 polling_tasks.push(task);
             }
-            for task in polling_tasks {
-                // tracing::debug!(
-                //     "polling_task_receiver processing task, remaining tasks: {:?}",
-                //     self.polling_task_receiver.len()
-                // );
-                task.poll_task();
+            for task_id in polling_tasks {
+                
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    // タスクが完了した場合、タスクを削除
+                    self.task_pool.borrow_mut().remove(task_id);
+                } 
+                
             }
 
-            if let Ok(task) = self.task_receiver.try_recv() {
-                task.poll_task();
+            let task_id_slot = self.task_receiver.try_recv();
+
+            if let Ok(task_id) = task_id_slot {
+                // タスクを取得してポーリング
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    // タスクが完了した場合、タスクを削除
+                    self.task_pool.borrow_mut().remove(task_id);
+                }
+            } else {
+                tracing::trace!("No task to poll");
             }
 
             // Reactor の完了イベントをポーリング
@@ -181,6 +197,19 @@ impl Runtime {
     {
         self.spawn(future);
         self.run_queue();
+    }
+
+    pub fn poll_task(&self, task_id: usize) -> Poll<()> {
+        let mut binding = self.task_pool.borrow_mut();
+        let task_slot = binding.get_mut(task_id).expect("Task not found");
+        let task = task_slot.take().expect("Task not found");
+        drop(binding);
+        let ret = task.poll_task(task_id);
+        // taskを再度task_slotに格納
+        let mut binding = self.task_pool.borrow_mut();
+        let task_slot = binding.get_mut(task_id).expect("Task not found");
+        task_slot.replace(task);
+        ret
     }
 
     pub fn register_file(&self, fd: i32) {
