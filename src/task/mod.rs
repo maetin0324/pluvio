@@ -41,7 +41,7 @@ impl<T> Future for JoinHandle<T> {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.borrow_mut().take() {
-            tracing::trace!("JoinHandle completed");
+            // tracing::trace!("JoinHandle completed");
             return Poll::Ready(result);
         }
 
@@ -63,7 +63,20 @@ pub struct Task<T: 'static> {
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        tracing::debug!("Task dropped");
+        // tracing::debug!("Task dropped");
+    }
+}
+
+impl<T> std::fmt::Debug for Task<T> 
+where
+    T: std::fmt::Debug + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Task")
+            // .field("future", &self.future)
+            .field("task_sender", &self.task_sender)
+            .field("shared_state", &self.shared_state)
+            .finish()
     }
 }
 
@@ -107,10 +120,19 @@ where
     // }
 }
 
+#[derive(Debug)]
 struct PluvioWaker {
     task_id: usize,
     task_sender: Sender<usize>,
 }
+
+// impl PluvioWaker {
+//     fn debug_top_level(&self) {
+//         if self.task_id == 0 {
+//             tracing::debug!("PluvioWaker: task_id: {} was waked", self.task_id);
+//         } 
+//     }
+// }
 
 unsafe fn clone_raw(data: *const ()) -> RawWaker
 {

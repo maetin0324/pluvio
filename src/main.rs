@@ -10,7 +10,7 @@ use futures::stream::StreamExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 8 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 12 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 32 * 1024;
 
 fn main() {
@@ -24,13 +24,12 @@ fn main() {
     let runtime = Runtime::new(1024, BUFFER_SIZE, 64, 100);
     let reactor = runtime.reactor.clone();
     runtime.clone().run(async move {
-        let now = std::time::Instant::now();
         let file = File::options()
             .create(true)
             .truncate(true)
             .read(true)
             .write(true)
-            .custom_flags(libc::O_DIRECT | libc::O_SYNC)
+            .custom_flags(libc::O_DIRECT)
             .open("/local/rmaeda/ucio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
@@ -50,6 +49,7 @@ fn main() {
         //     handles.push(handle);
         // }
 
+        let now = std::time::Instant::now();
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
             let buffer = prepare_buffer(runtime.clone().allocator.clone()).unwrap();
             // tracing::debug!("fill buffer with 0x61");
@@ -62,11 +62,9 @@ fn main() {
         }
 
         tracing::debug!("all tasks added to queue");
-        let waker = futures::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
         
         while if let Some(_) = handles.next().await {
             // tracing::debug!("write done");
-            waker.wake_by_ref();
             true
         } else {
             false

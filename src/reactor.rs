@@ -1,14 +1,15 @@
+use core::panic;
 use std::{
     cell::RefCell, collections::HashMap, io::Error, rc::Rc, sync::atomic::{AtomicU64, Ordering}, time::{Duration, Instant}
 };
 
 use io_uring::IoUring;
 
-use crate::task::SharedState;
+use crate::io::HandleState;
 
 pub struct Reactor {
     pub ring: Rc<RefCell<IoUring>>,
-    pub completions: Rc<RefCell<HashMap<u64, Rc<RefCell<SharedState<usize>>>>>>,
+    pub completions: Rc<RefCell<HashMap<u64, Rc<RefCell<HandleState<usize>>>>>>,
     pub user_data_counter: AtomicU64,
     last_submit_time: RefCell<std::time::Instant>,
     io_uring_params: IoUringParams,
@@ -26,6 +27,11 @@ impl Reactor {
             // .setup_iopoll()
             .build(queue_size)
             .expect("Failed to create io_uring");
+        if ring.params().is_feature_nodrop() {
+            tracing::info!("io_uring supports IORING_FEAT_NODROP");
+        } else {
+            tracing::warn!("io_uring does not support IORING_FEAT_NODROP");
+        }
         Reactor {
             ring: Rc::new(RefCell::new(ring)),
             completions: Rc::new(RefCell::new(HashMap::new())),
@@ -39,10 +45,10 @@ impl Reactor {
     }
 
     /// I/O 操作を登録し、対応する SharedState をマッピングに追加します。
-    pub fn register_io(&self, shared_state: Rc<RefCell<SharedState<usize>>>) -> u64 {
+    pub fn register_io(&self, handle_state: Rc<RefCell<HandleState<usize>>>) -> u64 {
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
         let mut completions = self.completions.borrow_mut();
-        completions.insert(user_data, shared_state);
+        completions.insert(user_data, handle_state);
         user_data
     }
 
@@ -77,6 +83,7 @@ impl Reactor {
             // SQE の送信
             // ring.submit().expect("Failed to submit SQE");
             ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
+            // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
             let mut last = self.last_submit_time.borrow_mut();
             *last = Instant::now();
@@ -90,29 +97,33 @@ impl Reactor {
             let user_data = cqe.user_data();
 
             // マッピングから SharedState を取得
-            let shared_state_opt = {
+            let handle_state_opt = {
                 let mut completions = self.completions.borrow_mut();
                 completions.remove(&user_data)
             };
 
-            if let Some(shared_state) = shared_state_opt {
-                let mut shared = shared_state.borrow_mut();
+            if let Some(handle_state) = handle_state_opt {
+                let mut handle = handle_state.borrow_mut();
                 if cqe.result() >= 0 {
-                    shared.result = RefCell::new(Some(Ok(cqe.result() as usize)));
+                    handle.result = RefCell::new(Some(Ok(cqe.result() as usize)));
                 } else {
                     // エラーハンドリング
-                    shared.result = RefCell::new(Some(Err(
+                    handle.result = RefCell::new(Some(Err(
                         Error::from_raw_os_error(-cqe.result()).to_string()
                     )));
                 }
 
                 // Waker を呼び出してタスクを再開
-                let waker_opt = shared.waker.borrow_mut().take();
+                let waker_opt = handle.waker.borrow_mut().take();
                 if let Some(waker) = waker_opt {
                     waker.wake();
+                } else {
+                    tracing::warn!("Waker is None for user_data: {}", user_data);
+                    panic!("Waker is None for user_data: {}", user_data);
                 }
+
             } else {
-                eprintln!("Received completion for unknown user_data: {}", user_data);
+                tracing::warn!("Received completion for unknown user_data: {}", user_data);
             }
         }
     }

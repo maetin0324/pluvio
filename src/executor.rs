@@ -153,6 +153,8 @@ impl Runtime {
     pub fn run_queue(&self) {
         // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
         // {
+        let mut noop_counter: u64 = 0;
+        let mut nooped = 0;
         loop {
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
@@ -174,12 +176,27 @@ impl Runtime {
 
             if let Ok(task_id) = task_id_slot {
                 // タスクを取得してポーリング
+                tracing::trace!("Runtime::run_queue task_id: {}", task_id);
                 if let Poll::Ready(_) = self.poll_task(task_id) {
                     // タスクが完了した場合、タスクを削除
                     self.task_pool.borrow_mut().remove(task_id);
+                    tracing::debug!("Task {} completed, remaining tasks: {}", task_id, self.task_pool.borrow().len());
                 }
             } else {
                 tracing::trace!("No task to poll");
+                noop_counter += 1;
+                if noop_counter > 10000000 {
+                    tracing::debug!("No tasks for a while, sleeping...");
+                    nooped += 1;
+                    if nooped > 10 {
+                        tracing::debug!("Too many noops, exiting...");
+                        let binding = self.task_pool.borrow();
+                        tracing::debug!("Remaining tasks: {}", binding.len());
+                        break;
+                    }
+                    // std::thread::sleep(std::time::Duration::from_millis(1));
+                    noop_counter = 0;
+                }
             }
 
             // Reactor の完了イベントをポーリング
