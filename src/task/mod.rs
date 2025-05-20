@@ -5,22 +5,23 @@ use std::{future::Future, pin::Pin, task::Waker};
 // use std::io::Result;
 // use crossbeam_channel::Sender;
 use std::sync::mpsc::Sender;
+use std::any::Any;
 
 
 // SharedState の定義
 #[derive(Debug)]
-pub struct SharedState<T> {
+pub struct SharedState {
     pub waker: RefCell<Option<Waker>>,
-    pub result: RefCell<Option<Result<T, String>>>,
+    pub result: RefCell<Option<Result<Box<dyn Any + 'static>, String>>>,
 }
 
-impl<T> Default for SharedState<T> {
+impl Default for SharedState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> SharedState<T> {
+impl SharedState {
     pub fn new() -> Self {
         SharedState {
             waker: RefCell::new(None),
@@ -30,10 +31,14 @@ impl<T> SharedState<T> {
 }
 
 pub struct JoinHandle<T> {
-    pub shared_state: Rc<RefCell<SharedState<T>>>,
+    pub shared_state: Rc<RefCell<SharedState>>,
+    pub type_data: std::marker::PhantomData<T>,
 }
 
-impl<T> Future for JoinHandle<T> {
+impl<T> Future for JoinHandle<T> 
+where
+    T: 'static,
+{
     type Output = Result<T, String>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -42,7 +47,17 @@ impl<T> Future for JoinHandle<T> {
         // 既に結果がある場合は Ready を返す
         if let Some(result) = shared.result.borrow_mut().take() {
             // tracing::trace!("JoinHandle completed");
-            return Poll::Ready(result);
+            let ret = match result {
+                Ok(data) => {
+                    let data = data.downcast::<T>();
+                    match data {
+                        Ok(data) => Ok(*data),
+                        Err(_) => Err("Failed to downcast".to_string()),
+                    }
+                }
+                Err(err) => Err(err),
+            };
+            return Poll::Ready(ret);
         }
 
         // Waker を登録
@@ -55,28 +70,32 @@ impl<T> Future for JoinHandle<T> {
 }
 
 // Task 構造体の定義
-pub struct Task<T: 'static> {
+pub struct Task {
     pub future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
     pub task_sender: Sender<usize>,
-    pub shared_state: Rc<RefCell<SharedState<T>>>,
+    pub shared_state: Rc<RefCell<SharedState>>,
 }
 
-impl<T> Drop for Task<T> {
+impl Drop for Task {
     fn drop(&mut self) {
         // tracing::debug!("Task dropped");
     }
 }
 
-impl<T> std::fmt::Debug for Task<T> 
-where
-    T: std::fmt::Debug + 'static,
+impl std::fmt::Debug for Task
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Task")
+        // let pluvio_waker = unsafe {
+        //     Rc::from_raw(self.shared_state.borrow().waker.borrow().as_ref().unwrap().data() as *const PluvioWaker)
+        // };
+        let ret = f.debug_struct("Task")
             // .field("future", &self.future)
             .field("task_sender", &self.task_sender)
             .field("shared_state", &self.shared_state)
-            .finish()
+            // .field("waker", &pluvio_waker)
+            .finish();
+        // std::mem::forget(pluvio_waker);
+        ret
     }
 }
 
@@ -85,9 +104,7 @@ pub trait TaskTrait {
     // fn schedule(self: Rc<Self>);
 }
 
-impl<T> TaskTrait for Task<T>
-where
-    T: 'static,
+impl TaskTrait for Task
 {
     fn poll_task(self: &Self, task_id: usize) -> std::task::Poll<()> {
         // let waker: Waker;

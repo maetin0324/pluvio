@@ -19,7 +19,7 @@ pub struct Runtime {
     polling_task_sender: Sender<usize>,
     pub task_receiver: Receiver<usize>,
     pub polling_task_receiver: Receiver<usize>,
-    pub task_pool: Rc<RefCell<Slab<Option<Box<dyn TaskTrait>>>>>,
+    pub task_pool: Rc<RefCell<Slab<Option<Task>>>>,
     pub allocator: Rc<FixedBufferAllocator>,
 }
 
@@ -60,13 +60,14 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Rc::new(RefCell::new(SharedState::<T> {
+        let shared = Rc::new(RefCell::new(SharedState {
             result: RefCell::new(None),
             waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
             shared_state: shared.clone(),
+            type_data: std::marker::PhantomData,
         };
 
         // Clone shared before moving into async block
@@ -76,17 +77,22 @@ impl Runtime {
             {
                 let binding = shared_clone.borrow_mut();
                 let mut result = binding.result.borrow_mut();
-                *result = Some(Ok(res));
+                let res_box = Box::new(res);
+                let res_any = res_box as Box<dyn std::any::Any>;
+                *result = Some(Ok(res_any));
             }
             if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 waker.wake();
+            } else {
+                tracing::error!("No waker to wake");
+                unreachable!();
             }
         };
-        let task = Some(Box::new(Task {
+        let task = Some(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
             shared_state: shared,
-        }) as Box<dyn TaskTrait>);
+        });
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
@@ -106,13 +112,14 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Rc::new(RefCell::new(SharedState::<T> {
+        let shared = Rc::new(RefCell::new(SharedState {
             result: RefCell::new(None),
             waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
             shared_state: shared.clone(),
+            type_data: std::marker::PhantomData,
         };
 
         // Clone shared before moving into async block
@@ -122,7 +129,9 @@ impl Runtime {
             {
                 let binding = shared_clone.borrow_mut();
                 let mut result = binding.result.borrow_mut();
-                *result = Some(Ok(res));
+                let res_box = Box::new(res);
+                let res_any = res_box as Box<dyn std::any::Any>;
+                *result = Some(Ok(res_any));
             }
             if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 tracing::trace!("Runtime::spawn wake");
@@ -130,11 +139,11 @@ impl Runtime {
             }
         };
         tracing::trace!("Runtime::spawn wrapped_future");
-        let task = Some(Box::new(Task {
+        let task = Some(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.polling_task_sender.clone(),
             shared_state: shared,
-        }) as Box<dyn TaskTrait>);
+        });
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
@@ -180,21 +189,26 @@ impl Runtime {
                 if let Poll::Ready(_) = self.poll_task(task_id) {
                     // タスクが完了した場合、タスクを削除
                     self.task_pool.borrow_mut().remove(task_id);
-                    tracing::debug!("Task {} completed, remaining tasks: {}", task_id, self.task_pool.borrow().len());
+                    tracing::trace!("Task {} completed, remaining tasks: {}", task_id, self.task_pool.borrow().len());
                 }
             } else {
                 tracing::trace!("No task to poll");
                 noop_counter += 1;
                 if noop_counter > 10000000 {
                     tracing::debug!("No tasks for a while, sleeping...");
+                    self.reactor.wait_cqueue();
                     nooped += 1;
                     if nooped > 10 {
-                        tracing::debug!("Too many noops, exiting...");
+                        tracing::warn!("Too many noops, exiting...");
                         let binding = self.task_pool.borrow();
-                        tracing::debug!("Remaining tasks: {}", binding.len());
+                        tracing::warn!("Remaining tasks: {}", binding.len());
+                        self.reactor.completion_debug_info();
+                        // binding.iter().for_each(|(id, task)| {
+                        //     tracing::debug!("Task {}: {:?}", id, task);
+                        // });
                         break;
                     }
-                    // std::thread::sleep(std::time::Duration::from_millis(1));
+                    // std::thread::sleep(std::time::Duration::from_millis(100));
                     noop_counter = 0;
                 }
             }
