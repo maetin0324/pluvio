@@ -1,8 +1,10 @@
 use std::{
-    cell::RefCell, future::Future, rc::Rc, time::Duration
+    cell::RefCell, future::Future, rc::Rc, task::Poll, time::Duration
 };
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+// use crossbeam_channel::{unbounded, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use slab::Slab;
 
 use crate::{
     io::allocator::FixedBufferAllocator,
@@ -13,10 +15,11 @@ use crate::{
 // Runtime の定義
 pub struct Runtime {
     pub reactor: Rc<Reactor>,
-    task_sender: Sender<Rc<dyn TaskTrait>>,
-    polling_task_sender: Sender<Rc<dyn TaskTrait>>,
-    pub task_receiver: Receiver<Rc<dyn TaskTrait>>,
-    pub polling_task_receiver: Receiver<Rc<dyn TaskTrait>>,
+    task_sender: Sender<usize>,
+    polling_task_sender: Sender<usize>,
+    pub task_receiver: Receiver<usize>,
+    pub polling_task_receiver: Receiver<usize>,
+    pub task_pool: Rc<RefCell<Slab<Option<Task>>>>,
     pub allocator: Rc<FixedBufferAllocator>,
 }
 
@@ -38,14 +41,16 @@ impl Runtime {
             &mut reactor.ring.borrow_mut(),
         );
         allocator.fill_buffers(0x61);
-        let (task_sender, task_receiver) = unbounded();
-        let (polling_task_sender, polling_task_receiver) = unbounded();
+        let (task_sender, task_receiver) = channel();
+        let (polling_task_sender, polling_task_receiver) = channel();
+        let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
         Rc::new(Runtime {
             reactor,
             task_sender,
             polling_task_sender,
             task_receiver,
             polling_task_receiver,
+            task_pool,
             allocator,
         })
     }
@@ -55,13 +60,14 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Rc::new(RefCell::new(SharedState::<T> {
+        let shared = Rc::new(RefCell::new(SharedState {
             result: RefCell::new(None),
             waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
             shared_state: shared.clone(),
+            type_data: std::marker::PhantomData,
         };
 
         // Clone shared before moving into async block
@@ -71,20 +77,32 @@ impl Runtime {
             {
                 let binding = shared_clone.borrow_mut();
                 let mut result = binding.result.borrow_mut();
-                *result = Some(Ok(res));
+                let res_box = Box::new(res);
+                let res_any = res_box as Box<dyn std::any::Any>;
+                *result = Some(Ok(res_any));
             }
             if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 waker.wake();
+            } else {
+                tracing::error!("No waker to wake");
+                unreachable!();
             }
         };
-        let task = Rc::new(Task {
+        let task = Some(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.task_sender.clone(),
             shared_state: shared,
         });
 
+        // タスクをスレッドプールに追加
+        let mut task_pool = self.task_pool.borrow_mut();
+        let task_id = task_pool.insert(task);
+        tracing::trace!("Runtime::spawn task_id: {}", task_id);
+
         // タスクをキューに送信
-        self.task_sender.send(task).expect("Failed to send task");
+        self.task_sender
+            .send(task_id)
+            .expect("Failed to send task");
 
         handle
     }
@@ -94,13 +112,14 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let shared = Rc::new(RefCell::new(SharedState::<T> {
+        let shared = Rc::new(RefCell::new(SharedState {
             result: RefCell::new(None),
             waker: RefCell::new(None),
         }));
 
         let handle = JoinHandle {
             shared_state: shared.clone(),
+            type_data: std::marker::PhantomData,
         };
 
         // Clone shared before moving into async block
@@ -110,7 +129,9 @@ impl Runtime {
             {
                 let binding = shared_clone.borrow_mut();
                 let mut result = binding.result.borrow_mut();
-                *result = Some(Ok(res));
+                let res_box = Box::new(res);
+                let res_any = res_box as Box<dyn std::any::Any>;
+                *result = Some(Ok(res_any));
             }
             if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 tracing::trace!("Runtime::spawn wake");
@@ -118,15 +139,20 @@ impl Runtime {
             }
         };
         tracing::trace!("Runtime::spawn wrapped_future");
-        let task = Rc::new(Task {
+        let task = Some(Task {
             future: Rc::new(RefCell::new(Box::pin(wrapped_future))),
             task_sender: self.polling_task_sender.clone(),
             shared_state: shared,
         });
 
+        // タスクをスレッドプールに追加
+        let mut task_pool = self.task_pool.borrow_mut();
+        let task_id = task_pool.insert(task);
+
+
         // タスクをキューに送信
         self.polling_task_sender
-            .send(task)
+            .send(task_id)
             .expect("Failed to send task");
 
         tracing::trace!("Runtime::spawn task_sent, return handle");
@@ -136,6 +162,8 @@ impl Runtime {
     pub fn run_queue(&self) {
         // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
         // {
+        let mut noop_counter: u64 = 0;
+        let mut nooped = 0;
         loop {
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
@@ -144,16 +172,41 @@ impl Runtime {
             while let Ok(task) = self.polling_task_receiver.try_recv() {
                 polling_tasks.push(task);
             }
-            for task in polling_tasks {
-                // tracing::debug!(
-                //     "polling_task_receiver processing task, remaining tasks: {:?}",
-                //     self.polling_task_receiver.len()
-                // );
-                task.poll_task();
+            for task_id in polling_tasks {
+                
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    // タスクが完了した場合、タスクを削除
+                    self.task_pool.borrow_mut().remove(task_id);
+                } 
+                
             }
 
-            if let Ok(task) = self.task_receiver.try_recv() {
-                task.poll_task();
+            let task_id_slot = self.task_receiver.try_recv();
+
+            if let Ok(task_id) = task_id_slot {
+                // タスクを取得してポーリング
+                tracing::trace!("Runtime::run_queue task_id: {}", task_id);
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    // タスクが完了した場合、タスクを削除
+                    self.task_pool.borrow_mut().remove(task_id);
+                    tracing::trace!("Task {} completed, remaining tasks: {}", task_id, self.task_pool.borrow().len());
+                }
+            } else {
+                tracing::trace!("No task to poll");
+                noop_counter += 1;
+                if noop_counter > 100 {
+                    // tracing::trace!("No tasks for a while, sleeping...");
+                    if !self.reactor.wait_cqueue(){
+                        tracing::debug!("No tasks in cqueue, sleeping...");
+                        nooped += 1;
+                        // std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+
+                    if nooped > 100 {
+                        tracing::debug!("No tasks for a while, breaking...");
+                        break;
+                    }
+                }
             }
 
             // Reactor の完了イベントをポーリング
@@ -171,6 +224,19 @@ impl Runtime {
     {
         self.spawn(future);
         self.run_queue();
+    }
+
+    pub fn poll_task(&self, task_id: usize) -> Poll<()> {
+        let mut binding = self.task_pool.borrow_mut();
+        let task_slot = binding.get_mut(task_id).expect("Task not found");
+        let task = task_slot.take().expect("Task not found");
+        drop(binding);
+        let ret = task.poll_task(task_id);
+        // taskを再度task_slotに格納
+        let mut binding = self.task_pool.borrow_mut();
+        let task_slot = binding.get_mut(task_id).expect("Task not found");
+        task_slot.replace(task);
+        ret
     }
 
     pub fn register_file(&self, fd: i32) {

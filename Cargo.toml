@@ -9,6 +9,7 @@ futures = "0.3.31"
 futures-lite = "2.6.0"
 io-uring = "0.7.3"
 libc = "0.2.169"
+slab = "0.4.9"
 tracing = "0.1.41"
 tracing-subscriber = {version = "0.3.19", features = ["env-filter"]}
 waker-fn = "1.2.0"
