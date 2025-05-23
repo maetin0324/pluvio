@@ -11,7 +11,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static TOTAL_SIZE: usize = 12 * 1024 * 1024 * 1024;
-static BUFFER_SIZE: usize = 32 * 1024;
+static BUFFER_SIZE: usize = 4 * 1024;
 
 fn main() {
     tracing_subscriber::registry()

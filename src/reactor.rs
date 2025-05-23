@@ -70,6 +70,9 @@ impl Reactor {
         let mut ring = self.ring.borrow_mut();
         let submission = ring.submission();
 
+        // SQE の送信を行うかどうかの判定
+        // 1. submission の長さが submit_depth を超えた場合
+        // 2. submission が空でなく、前回の送信から wait_timeout を超えた場合
         let elapsed = {
             let last = self.last_submit_time.borrow();
             last.elapsed()
@@ -82,8 +85,8 @@ impl Reactor {
             tracing::trace!("submitted {} SQEs", submission.len());
             drop(submission);
             // SQE の送信
-            // ring.submit().expect("Failed to submit SQE");
-            ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
+            ring.submit().expect("Failed to submit SQE");
+            // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
             // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
             let mut last = self.last_submit_time.borrow_mut();
@@ -91,6 +94,8 @@ impl Reactor {
         } else {
             drop(submission);
         }
+
+        // CQの処理
 
         let cq = ring.completion();
 
@@ -129,6 +134,8 @@ impl Reactor {
                 unreachable!("Received completion for unknown user_data");
             }
         }
+
+        // 
     }
 
     pub fn is_empty(&self) -> bool {
@@ -146,9 +153,16 @@ impl Reactor {
         tracing::debug!("completed_count: {}", self.completed_count.get());
     }
 
-    pub fn wait_cqueue(&self) {
+    pub fn wait_cqueue(&self) -> bool {
         let ring = self.ring.borrow_mut();
+        // 完了数が発行数より少ない場合にio_uring_enterを実行
+        let completed_count = self.completed_count.get();
+        let submitted_count = self.user_data_counter.load(Ordering::Relaxed);
+        if completed_count >= submitted_count {
+            return false;
+        }
         ring.submit_and_wait(0).expect("Failed to wait for completion");
+        true
     }
 
     pub fn completed_count(&self) -> u64 {

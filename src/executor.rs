@@ -194,22 +194,18 @@ impl Runtime {
             } else {
                 tracing::trace!("No task to poll");
                 noop_counter += 1;
-                if noop_counter > 10000000 {
-                    tracing::debug!("No tasks for a while, sleeping...");
-                    self.reactor.wait_cqueue();
-                    nooped += 1;
-                    if nooped > 10 {
-                        tracing::warn!("Too many noops, exiting...");
-                        let binding = self.task_pool.borrow();
-                        tracing::warn!("Remaining tasks: {}", binding.len());
-                        self.reactor.completion_debug_info();
-                        // binding.iter().for_each(|(id, task)| {
-                        //     tracing::debug!("Task {}: {:?}", id, task);
-                        // });
+                if noop_counter > 100 {
+                    // tracing::trace!("No tasks for a while, sleeping...");
+                    if !self.reactor.wait_cqueue(){
+                        tracing::debug!("No tasks in cqueue, sleeping...");
+                        nooped += 1;
+                        // std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+
+                    if nooped > 100 {
+                        tracing::debug!("No tasks for a while, breaking...");
                         break;
                     }
-                    // std::thread::sleep(std::time::Duration::from_millis(100));
-                    noop_counter = 0;
                 }
             }
 
