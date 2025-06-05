@@ -5,6 +5,7 @@ use io_uring::types;
 use pluvio::executor::Runtime;
 use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
 use std::os::unix::fs::OpenOptionsExt;
+use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 
 use tracing_subscriber::layer::SubscriberExt;
@@ -71,6 +72,8 @@ fn main() {
             false
         } {}
         tracing::debug!("task 100 stat: {:?}", runtime.get_stats_by_name("write_fixed_100"));
+        tracing::debug!("execute time of all task: {}s", Duration::from_nanos(runtime.get_total_time("")).as_secs_f64());
+        tracing::debug!("reactor poll time: {}s", Duration::from_nanos(runtime.get_reactor_polling_time()).as_secs_f64());
         tracing::info!("write done: {:?}", now.elapsed());
         tracing::info!(
             "bandwidth: {:?}MiB/s",

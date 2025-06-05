@@ -196,7 +196,9 @@ impl Runtime {
             }
 
             // Reactor の完了イベントをポーリング
+            let now = std::time::Instant::now();
             self.reactor.poll_submit_and_completions();
+            self.stat.add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
 
             // イベントループの待機（適宜調整）
             // std::thread::sleep(std::time::Duration::from_millis(10));
@@ -246,7 +248,7 @@ impl Runtime {
             .filter_map(|(_, task)| {
                 task.as_ref().and_then(|t| {
                     if let Some(stat) = &t.task_stat {
-                        if stat.task_name.as_deref() == Some(name) {
+                        if stat.task_name.as_deref().unwrap_or("").contains(name) {
                             Some(stat.clone())
                         } else {
                             None
@@ -267,6 +269,20 @@ impl Runtime {
         let mut all_stats = running_stats;
         all_stats.extend(finished_stats);
         all_stats
+    }
+
+    pub fn get_total_time(&self, name: &str) -> u64 {
+        let binding = self.stat.finished_task_stats.borrow();
+        let total_time = binding
+            .iter()
+            .filter(|stat| stat.task_name.as_deref().unwrap_or("").contains(name))
+            .map(|stat| stat.execute_time_ns.get())
+            .sum();
+        total_time
+    }
+
+    pub fn get_reactor_polling_time(&self) -> u64 {
+        self.stat.pool_and_completion_time.get()
     }
 
     // pub fn grow_buffers(&self) {
