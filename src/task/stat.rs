@@ -1,23 +1,25 @@
-use crate::task::Task;
+use std::cell::Cell;
 
+
+#[derive(Clone)]
 pub struct TaskStat {
     pub task_name: Option<String>,
-    pub execute_time_ns: u64,
+    pub execute_time_ns: Cell<u64>,
+    pub running: Cell<bool>,
 }
 
 impl TaskStat {
-    pub fn new(task_name: Option<String>, execute_time_ns: u64) -> Self {
+    pub fn new(task_name: Option<String>) -> Self {
         TaskStat {
             task_name,
-            execute_time_ns,
+            execute_time_ns: Cell::new(0),
+            running: Cell::new(true),
         }
     }
 
-    pub fn new_from_task(task: &Task) -> Self {
-        TaskStat {
-            task_name: task.task_name.clone(),
-            execute_time_ns: task.execute_time_ns.get(),
-        }
+    pub fn add_execute_time(&self, time_ns: u64) {
+        let current_time = self.execute_time_ns.get();
+        self.execute_time_ns.set(current_time + time_ns);
     }
 }
 
@@ -25,7 +27,7 @@ impl std::fmt::Debug for TaskStat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TaskStatics")
             .field("task_name", &self.task_name)
-            .field("execute_time_ns", &self.execute_time_ns)
+            .field("execute_time_ns", &self.execute_time_ns.get())
             .finish()
     }
 }

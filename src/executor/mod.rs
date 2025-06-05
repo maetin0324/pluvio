@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod stat;
 
 use std::{cell::RefCell, future::Future, rc::Rc, task::Poll, time::Duration};
 
@@ -6,6 +7,7 @@ use slab::Slab;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
+    executor::stat::RuntimeStat,
     io::allocator::FixedBufferAllocator,
     reactor::Reactor,
     task::{JoinHandle, Task, TaskTrait},
@@ -20,6 +22,7 @@ pub struct Runtime {
     pub polling_task_receiver: Receiver<usize>,
     pub task_pool: Rc<RefCell<Slab<Option<Task>>>>,
     pub allocator: Rc<FixedBufferAllocator>,
+    stat: RuntimeStat,
 }
 
 impl Runtime {
@@ -51,6 +54,7 @@ impl Runtime {
             polling_task_receiver,
             task_pool,
             allocator,
+            stat: RuntimeStat::new(),
         })
     }
 
@@ -149,7 +153,10 @@ impl Runtime {
             for task_id in polling_tasks {
                 if let Poll::Ready(_) = self.poll_task(task_id) {
                     // タスクが完了した場合、タスクを削除
-                    self.task_pool.borrow_mut().remove(task_id);
+                    let mut binding = self.task_pool.borrow_mut();
+                    let task = binding.get_mut(task_id);
+                    self.stat.add_task_stat(task);
+                    binding.remove(task_id);
                 }
             }
 
@@ -159,8 +166,11 @@ impl Runtime {
                 // タスクを取得してポーリング
                 tracing::trace!("Runtime::run_queue task_id: {}", task_id);
                 if let Poll::Ready(_) = self.poll_task(task_id) {
-                    // タスクが完了した場合、タスクを削除
-                    self.task_pool.borrow_mut().remove(task_id);
+                    let mut binding = self.task_pool.borrow_mut();
+                    let task = binding.get_mut(task_id);
+                    self.stat.add_task_stat(task);
+
+                    binding.remove(task_id);
                     tracing::trace!(
                         "Task {} completed, remaining tasks: {}",
                         task_id,
@@ -217,6 +227,46 @@ impl Runtime {
 
     pub fn register_file(&self, fd: i32) {
         self.reactor.register_file(fd);
+    }
+
+    pub fn log_stat(&self) {
+        let binding = self.task_pool.borrow();
+        let running_task_stats = binding
+            .iter()
+            .filter_map(|(_, task)| task.as_ref().and_then(|t| t.task_stat.as_ref()))
+            .collect::<Vec<_>>();
+        tracing::debug!("Running Task Stats: {:?}", running_task_stats);
+        tracing::debug!("Runtime Stats: {:?}", self.stat);
+    }
+
+    pub fn get_stats_by_name(&self, name: &str) -> Vec<crate::task::stat::TaskStat> {
+        let binding = self.task_pool.borrow();
+        let running_stats = binding
+            .iter()
+            .filter_map(|(_, task)| {
+                task.as_ref().and_then(|t| {
+                    if let Some(stat) = &t.task_stat {
+                        if stat.task_name.as_deref() == Some(name) {
+                            Some(stat.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect::<Vec<crate::task::stat::TaskStat>>();
+
+        let binding = self.stat.finished_task_stats.borrow();
+        let finished_stats = binding
+            .iter()
+            .filter(|stat| stat.task_name.as_deref() == Some(name))
+            .cloned()
+            .collect::<Vec<crate::task::stat::TaskStat>>();
+        let mut all_stats = running_stats;
+        all_stats.extend(finished_stats);
+        all_stats
     }
 
     // pub fn grow_buffers(&self) {

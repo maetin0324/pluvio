@@ -1,11 +1,11 @@
 #![allow(unused_imports)]
 
+use futures::stream::StreamExt;
 use io_uring::types;
-use std::os::unix::fs::OpenOptionsExt;
-use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use pluvio::executor::Runtime;
 use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
-use futures::stream::StreamExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -30,7 +30,7 @@ fn main() {
             .read(true)
             .write(true)
             .custom_flags(libc::O_DIRECT)
-            .open("/scr/ucio_test.txt")
+            .open("/local/rmaeda/pluvio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
@@ -55,22 +55,27 @@ fn main() {
             // tracing::debug!("fill buffer with 0x61");
             let reactor = reactor.clone();
             let offset = (i * BUFFER_SIZE) as u64;
-            let handle = runtime
-                .clone()
-                .spawn(write_fixed(fd, offset, buffer, reactor));
+            let handle = runtime.clone().spawn_with_name(
+                write_fixed(fd, offset, buffer, reactor),
+                format!("write_fixed_{}", i),
+            );
             handles.push(handle);
         }
 
         tracing::debug!("all tasks added to queue");
-        
+
         while if let Some(_) = handles.next().await {
             // tracing::debug!("write done");
             true
         } else {
             false
         } {}
+        tracing::debug!("task 100 stat: {:?}", runtime.get_stats_by_name("write_fixed_100"));
         tracing::info!("write done: {:?}", now.elapsed());
-        tracing::info!("bandwidth: {:?}MiB/s", (TOTAL_SIZE / 1024 / 1024) as f64 / now.elapsed().as_secs_f64());
+        tracing::info!(
+            "bandwidth: {:?}MiB/s",
+            (TOTAL_SIZE / 1024 / 1024) as f64 / now.elapsed().as_secs_f64()
+        );
         std::process::exit(0);
     });
 }
