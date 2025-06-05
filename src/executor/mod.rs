@@ -42,7 +42,7 @@ impl Runtime {
             buffer_size,
             &mut reactor.ring.borrow_mut(),
         );
-        allocator.fill_buffers(0x61);
+        // allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = channel();
         let (polling_task_sender, polling_task_receiver) = channel();
         let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
