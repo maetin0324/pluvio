@@ -84,8 +84,8 @@ impl Runtime {
             if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
                 waker.wake();
             } else {
-                tracing::error!("No waker to wake");
-                unreachable!();
+                tracing::trace!("No waker to wake");
+                // unreachable!();
             }
         };
         let task = Some(Task {
@@ -197,15 +197,15 @@ impl Runtime {
                 if noop_counter > 100 {
                     // tracing::trace!("No tasks for a while, sleeping...");
                     if !self.reactor.wait_cqueue(){
-                        tracing::debug!("No tasks in cqueue, sleeping...");
+                        tracing::trace!("No tasks in cqueue, sleeping...");
                         nooped += 1;
                         // std::thread::sleep(std::time::Duration::from_millis(1));
                     }
 
-                    if nooped > 100 {
-                        tracing::debug!("No tasks for a while, breaking...");
-                        break;
-                    }
+                    // if nooped > 100 {
+                    //     tracing::debug!("No tasks for a while, breaking...");
+                    //     break;
+                    // }
                 }
             }
 
