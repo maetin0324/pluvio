@@ -1,12 +1,13 @@
-use std::cell::RefCell;
+pub mod stat;
+
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable};
 use std::{future::Future, pin::Pin, task::Waker};
 // use std::io::Result;
 // use crossbeam_channel::Sender;
-use std::sync::mpsc::Sender;
 use std::any::Any;
-
+use std::sync::mpsc::Sender;
 
 // SharedState の定義
 #[derive(Debug)]
@@ -28,6 +29,10 @@ impl SharedState {
             result: RefCell::new(None),
         }
     }
+
+    pub fn new_with_wrapped() -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self::new()))
+    }
 }
 
 pub struct JoinHandle<T> {
@@ -35,7 +40,7 @@ pub struct JoinHandle<T> {
     pub type_data: std::marker::PhantomData<T>,
 }
 
-impl<T> Future for JoinHandle<T> 
+impl<T> Future for JoinHandle<T>
 where
     T: 'static,
 {
@@ -74,6 +79,68 @@ pub struct Task {
     pub future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
     pub task_sender: Sender<usize>,
     pub shared_state: Rc<RefCell<SharedState>>,
+    execute_time_ns: Cell<u64>,
+    task_name: Option<String>,
+}
+
+impl Task {
+    pub fn new(
+        future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
+        task_sender: Sender<usize>,
+        shared_state: Rc<RefCell<SharedState>>,
+        task_name: Option<String>,
+    ) -> Self {
+        Task {
+            future,
+            task_sender,
+            shared_state,
+            execute_time_ns: Cell::new(0),
+            task_name,
+        }
+    }
+
+    pub fn create_task_and_handle<F, T>(
+        future: F,
+        sender: Sender<usize>,
+        task_name: Option<String>,
+    ) -> (Option<Task>, JoinHandle<T>)
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        let shared = SharedState::new_with_wrapped();
+
+        let handle: JoinHandle<T> = JoinHandle {
+            shared_state: shared.clone(),
+            type_data: std::marker::PhantomData,
+        };
+
+        // Clone shared before moving into async block
+        let shared_clone = shared.clone();
+        let wrapped_future = async move {
+            let res = future.await;
+            {
+                let binding = shared_clone.borrow_mut();
+                let mut result = binding.result.borrow_mut();
+                let res_box = Box::new(res);
+                let res_any = res_box as Box<dyn std::any::Any>;
+                *result = Some(Ok(res_any));
+            }
+            if let Some(waker) = shared_clone.borrow_mut().waker.borrow_mut().take() {
+                tracing::trace!("Runtime::spawn wake");
+                waker.wake();
+            }
+        };
+        tracing::trace!("Runtime::spawn wrapped_future");
+        let task = Some(Task::new(
+            Rc::new(RefCell::new(Box::pin(wrapped_future))),
+            sender,
+            shared,
+            task_name,
+        ));
+
+        (task, handle)
+    }
 }
 
 impl Drop for Task {
@@ -82,13 +149,13 @@ impl Drop for Task {
     }
 }
 
-impl std::fmt::Debug for Task
-{
+impl std::fmt::Debug for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // let pluvio_waker = unsafe {
         //     Rc::from_raw(self.shared_state.borrow().waker.borrow().as_ref().unwrap().data() as *const PluvioWaker)
         // };
-        let ret = f.debug_struct("Task")
+        let ret = f
+            .debug_struct("Task")
             // .field("future", &self.future)
             .field("task_sender", &self.task_sender)
             .field("shared_state", &self.shared_state)
@@ -104,8 +171,7 @@ pub trait TaskTrait {
     // fn schedule(self: Rc<Self>);
 }
 
-impl TaskTrait for Task
-{
+impl TaskTrait for Task {
     fn poll_task(self: &Self, task_id: usize) -> std::task::Poll<()> {
         // let waker: Waker;
         // if let None = self.shared_state.borrow().waker.borrow().as_ref() {
@@ -114,6 +180,8 @@ impl TaskTrait for Task
         // } else {
         //     waker = self.shared_state.borrow().waker.borrow().as_ref().unwrap().clone();
         // }
+        let now = std::time::Instant::now();
+        let execute_time_ns = self.execute_time_ns.get();
 
         let waker = new_waker(self.task_sender.clone(), task_id);
 
@@ -127,7 +195,12 @@ impl TaskTrait for Task
         };
 
         // let _ = future_slot.as_mut().poll(&mut context);
-        future_slot.as_mut().poll(&mut context)
+        let ret = future_slot.as_mut().poll(&mut context);
+
+        self.execute_time_ns
+            .set(now.elapsed().as_nanos() as u64 + execute_time_ns);
+
+        ret
     }
 
     // fn schedule(self: Rc<Self>) {
@@ -147,12 +220,11 @@ struct PluvioWaker {
 //     fn debug_top_level(&self) {
 //         if self.task_id == 0 {
 //             tracing::debug!("PluvioWaker: task_id: {} was waked", self.task_id);
-//         } 
+//         }
 //     }
 // }
 
-unsafe fn clone_raw(data: *const ()) -> RawWaker
-{
+unsafe fn clone_raw(data: *const ()) -> RawWaker {
     let rc: Rc<PluvioWaker> = Rc::from_raw(data as *const PluvioWaker);
     let rc_clone = rc.clone();
     let ptr = Rc::into_raw(rc_clone) as *const ();
@@ -161,37 +233,32 @@ unsafe fn clone_raw(data: *const ()) -> RawWaker
     RawWaker::new(ptr, get_vtable())
 }
 
-unsafe fn wake_raw(data: *const ())
-{
+unsafe fn wake_raw(data: *const ()) {
     let rc: Rc<PluvioWaker> = Rc::from_raw(data as *const PluvioWaker);
-    rc.task_sender.send(rc.task_id).expect("Failed to send task");
+    rc.task_sender
+        .send(rc.task_id)
+        .expect("Failed to send task");
 }
 
-unsafe fn wake_by_ref_raw(data: *const ())
-{
+unsafe fn wake_by_ref_raw(data: *const ()) {
     let rc: Rc<PluvioWaker> = Rc::from_raw(data as *const PluvioWaker);
     let rc_clone = rc.clone();
-    rc_clone.task_sender.send(rc_clone.task_id).expect("Failed to send task");
+    rc_clone
+        .task_sender
+        .send(rc_clone.task_id)
+        .expect("Failed to send task");
     std::mem::forget(rc);
 }
 
-unsafe fn drop_raw(data: *const ())
-{
+unsafe fn drop_raw(data: *const ()) {
     drop(Rc::from_raw(data as *const PluvioWaker));
 }
 
-fn get_vtable() -> &'static RawWakerVTable
-{
-    &RawWakerVTable::new(
-        clone_raw,
-        wake_raw,
-        wake_by_ref_raw,
-        drop_raw,
-    )
+fn get_vtable() -> &'static RawWakerVTable {
+    &RawWakerVTable::new(clone_raw, wake_raw, wake_by_ref_raw, drop_raw)
 }
 
-fn new_waker(sender: Sender<usize>, id: usize) -> Waker
-{
+fn new_waker(sender: Sender<usize>, id: usize) -> Waker {
     let pluvio_waker = PluvioWaker {
         task_id: id,
         task_sender: sender,
