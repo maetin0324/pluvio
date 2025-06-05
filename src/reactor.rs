@@ -85,8 +85,8 @@ impl Reactor {
             tracing::trace!("submitted {} SQEs", submission.len());
             drop(submission);
             // SQE の送信
-            ring.submit().expect("Failed to submit SQE");
-            // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
+            // ring.submit().expect("Failed to submit SQE");
+            ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
             // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
             let mut last = self.last_submit_time.borrow_mut();
