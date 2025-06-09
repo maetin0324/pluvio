@@ -1,5 +1,5 @@
-use crate::reactor::Reactor;
-use allocator::{FixedBufferAllocator, WriteFixedBuffer};
+use crate::reactor::{HandleState, IoUringReactor};
+use crate::reactor::allocator::{FixedBuffer, FixedBufferAllocator, WriteFixedBuffer};
 use io_uring::types;
 use std::cell::RefCell;
 use std::future::Future;
@@ -8,30 +8,19 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-pub mod allocator;
+pub mod file;
 
-pub struct HandleState<T> {
-    pub waker: RefCell<Option<std::task::Waker>>,
-    pub result: RefCell<Option<Result<T, String>>>,
-}
-impl<T> HandleState<T> {
-    pub fn new() -> Self {
-        HandleState {
-            waker: RefCell::new(None),
-            result: RefCell::new(None),
-        }
-    }
-}
+
 pub struct ReadFileFuture {
-    handle_state: Rc<RefCell<HandleState<usize>>>,
+    handle_state: Rc<RefCell<HandleState<i32>>>,
     fd: i32,
     buffer: Vec<u8>,
     offset: u64,
-    reactor: Rc<Reactor>,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl ReadFileFuture {
-    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<Reactor>) -> Self {
+    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<IoUringReactor>) -> Self {
         ReadFileFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
             fd,
@@ -43,7 +32,7 @@ impl ReadFileFuture {
 }
 
 impl Future for ReadFileFuture {
-    type Output = Result<usize, String>;
+    type Output = std::io::Result<i32>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -94,15 +83,15 @@ impl Future for ReadFileFuture {
 }
 
 pub struct WriteFileFuture {
-    handle_state: Rc<RefCell<HandleState<usize>>>,
+    handle_state: Rc<RefCell<HandleState<i32>>>,
     fd: i32,
     buffer: Vec<u8>,
     offset: u64,
-    reactor: Rc<Reactor>,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl WriteFileFuture {
-    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<Reactor>) -> Self {
+    pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<IoUringReactor>) -> Self {
         WriteFileFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
             fd,
@@ -114,7 +103,7 @@ impl WriteFileFuture {
 }
 
 impl Future for WriteFileFuture {
-    type Output = Result<usize, String>;
+    type Output = std::io::Result<i32>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -167,13 +156,13 @@ impl Future for WriteFileFuture {
 }
 
 pub struct WriteFixedFuture {
-    handle_state: Rc<RefCell<HandleState<usize>>>,
+    handle_state: Rc<RefCell<HandleState<i32>>>,
     sqe: io_uring::squeue::Entry,
-    reactor: Rc<Reactor>,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl WriteFixedFuture {
-    pub fn new(sqe: io_uring::squeue::Entry, reactor: Rc<Reactor>) -> Self {
+    pub fn new(sqe: io_uring::squeue::Entry, reactor: Rc<IoUringReactor>) -> Self {
         WriteFixedFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
             sqe,
@@ -184,7 +173,7 @@ impl WriteFixedFuture {
 
 
 impl Future for WriteFixedFuture {
-    type Output = Result<usize, String>;
+    type Output = std::io::Result<i32>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -216,12 +205,12 @@ impl Future for WriteFixedFuture {
     }
 }
 
-pub fn prepare_buffer(mut allocator: Rc<FixedBufferAllocator>) -> Option<WriteFixedBuffer> {
+pub fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> Option<FixedBuffer> {
     let buffer = allocator.acquire();
     buffer
 }
 
-pub fn write_fixed(fd: i32, offset: u64, buffer: WriteFixedBuffer, reactor: Rc<Reactor>) -> WriteFixedFuture {
+pub fn write_fixed(fd: i32, offset: u64, buffer: WriteFixedBuffer, reactor: Rc<IoUringReactor>) -> WriteFixedFuture {
     let sqe = buffer.prepare_sqe(fd, offset);
     WriteFixedFuture::new(sqe, reactor)
 }

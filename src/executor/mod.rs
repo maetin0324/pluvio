@@ -8,20 +8,18 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     executor::stat::RuntimeStat,
-    io::allocator::FixedBufferAllocator,
-    reactor::Reactor,
+    reactor::IoUringReactor,
     task::{JoinHandle, Task, TaskTrait},
 };
 
 // Runtime の定義
 pub struct Runtime {
-    pub reactor: Rc<Reactor>,
+    pub reactor: Rc<IoUringReactor>,
     task_sender: Sender<usize>,
     polling_task_sender: Sender<usize>,
     pub task_receiver: Receiver<usize>,
     pub polling_task_receiver: Receiver<usize>,
     pub task_pool: Rc<RefCell<Slab<Option<Task>>>>,
-    pub allocator: Rc<FixedBufferAllocator>,
     stat: RuntimeStat,
 }
 
@@ -32,16 +30,12 @@ impl Runtime {
         submit_depth: u32,
         wait_timeout: u64,
     ) -> Rc<Self> {
-        let reactor = Rc::new(Reactor::new(
+        let reactor = Rc::new(IoUringReactor::new(
             queue_size,
+            buffer_size,
             submit_depth,
             Duration::from_millis(wait_timeout),
         ));
-        let allocator = FixedBufferAllocator::new(
-            queue_size as usize,
-            buffer_size,
-            &mut reactor.ring.borrow_mut(),
-        );
         // allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = channel();
         let (polling_task_sender, polling_task_receiver) = channel();
@@ -53,7 +47,6 @@ impl Runtime {
             task_receiver,
             polling_task_receiver,
             task_pool,
-            allocator,
             stat: RuntimeStat::new(),
         })
     }

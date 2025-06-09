@@ -37,6 +37,8 @@ fn main() {
 
         runtime.register_file(fd);
 
+        let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file, reactor.clone()));
+
         let mut handles = futures::stream::FuturesUnordered::new();
         // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
         //     let buffer = vec![0x61; BUFFER_SIZE];
@@ -52,12 +54,14 @@ fn main() {
 
         let now = std::time::Instant::now();
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            let buffer = prepare_buffer(runtime.clone().allocator.clone()).unwrap();
+            let file = dma_file.clone();
+            let buffer = file
+                .acquire_buffer()
+                .expect("Failed to prepare buffer");
             // tracing::debug!("fill buffer with 0x61");
-            let reactor = reactor.clone();
             let offset = (i * BUFFER_SIZE) as u64;
             let handle = runtime.clone().spawn_with_name(
-                write_fixed(fd, offset, buffer, reactor),
+                async move  {file.write_fixed(buffer, offset).await},
                 format!("write_fixed_{}", i),
             );
             handles.push(handle);

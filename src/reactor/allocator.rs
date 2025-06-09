@@ -57,7 +57,7 @@ impl FixedBufferAllocator {
     }
 
     /// Acquires an available buffer. Returns a WriteFixedBuffer handle.
-    pub fn acquire(self: &mut Rc<Self>) -> Option<WriteFixedBuffer> {
+    pub fn acquire(self: &Rc<Self>) -> Option<FixedBuffer> {
         let mut free = self.free_indices.borrow_mut();
         {
             let total = self.buffers.len();
@@ -66,7 +66,7 @@ impl FixedBufferAllocator {
                 (total - free.len()) as f64 / total as f64 * 100.0
             ) 
         }
-        free.pop().map(|index| WriteFixedBuffer {
+        free.pop().map(|index| FixedBuffer {
             index,
             allocator: Rc::clone(self),
         })
@@ -178,6 +178,25 @@ impl Drop for WriteFixedBuffer {
         self.allocator.release(self.index);
     }
 }
+
+pub struct FixedBuffer {
+    pub(crate) index: usize,
+    pub(crate) allocator: Rc<FixedBufferAllocator>,
+}
+
+impl FixedBuffer {
+    pub fn as_mut_slice(&self) -> std::cell::RefMut<'_, Box<[u8]>> {
+        self.allocator.get_buffer_mut(self.index)
+    }
+}
+
+impl Drop for FixedBuffer {
+    fn drop(&mut self) {
+        // On drop, the buffer is marked as free.
+        self.allocator.release(self.index);
+    }
+}
+
 
 fn aligned_alloc(size: usize) -> Box<[u8]> {
     unsafe {
