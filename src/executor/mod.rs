@@ -167,7 +167,7 @@ impl Runtime {
                     tracing::trace!(
                         "Task {} completed, remaining tasks: {}",
                         task_id,
-                        self.task_pool.borrow().len()
+                        binding.len()
                     );
                 }
             } else {

@@ -98,7 +98,7 @@ impl IoUringReactor {
         let ring = Rc::new(RefCell::new(ring));
 
         let allocator =
-            FixedBufferAllocator::new((queue_size * 2) as usize, buffer_size, &mut ring.borrow_mut());
+            FixedBufferAllocator::new((queue_size) as usize, buffer_size, &mut ring.borrow_mut());
 
         IoUringReactor {
             ring: ring,
@@ -229,8 +229,8 @@ impl IoUringReactor {
         //
     }
 
-    pub fn acquire_buffer(&self) -> Option<FixedBuffer> {
-        self.allocator.acquire()
+    pub async fn acquire_buffer(&self) -> FixedBuffer {
+        self.allocator.acquire().await
     }
 
     pub fn is_empty(&self) -> bool {

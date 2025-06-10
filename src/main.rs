@@ -3,7 +3,7 @@
 use futures::stream::StreamExt;
 use io_uring::types;
 use pluvio::executor::Runtime;
-use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
+use pluvio::io::{prepare_buffer, ReadFileFuture, WriteFileFuture};
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
@@ -56,8 +56,7 @@ fn main() {
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
             let file = dma_file.clone();
             let buffer = file
-                .acquire_buffer()
-                .expect("Failed to prepare buffer");
+                .acquire_buffer().await;
             // tracing::debug!("fill buffer with 0x61");
             let offset = (i * BUFFER_SIZE) as u64;
             let handle = runtime.clone().spawn_with_name(

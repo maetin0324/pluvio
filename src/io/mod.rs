@@ -1,5 +1,5 @@
 use crate::reactor::{HandleState, IoUringReactor};
-use crate::reactor::allocator::{FixedBuffer, FixedBufferAllocator, WriteFixedBuffer};
+use crate::reactor::allocator::{FixedBuffer, FixedBufferAllocator};
 use io_uring::types;
 use std::cell::RefCell;
 use std::future::Future;
@@ -205,12 +205,11 @@ impl Future for WriteFixedFuture {
     }
 }
 
-pub fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> Option<FixedBuffer> {
-    let buffer = allocator.acquire();
-    buffer
+pub async fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> FixedBuffer {
+    allocator.acquire().await
 }
 
-pub fn write_fixed(fd: i32, offset: u64, buffer: WriteFixedBuffer, reactor: Rc<IoUringReactor>) -> WriteFixedFuture {
-    let sqe = buffer.prepare_sqe(fd, offset);
-    WriteFixedFuture::new(sqe, reactor)
-}
+// pub fn write_fixed(fd: i32, offset: u64, buffer: WriteFixedBuffer, reactor: Rc<IoUringReactor>) -> WriteFixedFuture {
+//     let sqe = buffer.prepare_sqe(fd, offset);
+//     WriteFixedFuture::new(sqe, reactor)
+// }

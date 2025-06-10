@@ -45,9 +45,9 @@ impl DmaFile {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::ReadFixed::new(
             io_uring::types::Fd(fd),
-            buffer.as_mut_slice().as_mut_ptr(),
-            buffer.as_mut_slice().len() as u32,
-            buffer.index as u16,
+            buffer.as_ptr() as *mut u8,
+            buffer.len() as u32,
+            buffer.index() as u16,
         )
         .offset(offset)
         .build();
@@ -57,19 +57,21 @@ impl DmaFile {
 
     pub async fn write_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
-        let sqe = io_uring::opcode::WriteFixed::new(
-            io_uring::types::Fd(fd),
-            buffer.as_mut_slice().as_ptr(),
-            buffer.as_mut_slice().len() as u32,
-            buffer.index as u16,
-        )
-        .offset(offset)
-        .build();
+        let sqe = { 
+            io_uring::opcode::WriteFixed::new(
+                io_uring::types::Fd(fd),
+                buffer.as_ptr(),
+                buffer.len() as u32,
+                buffer.index() as u16,
+            )
+            .offset(offset)
+            .build()
+        };
 
         self.reactor.push_sqe(sqe).await
     }
 
-    pub fn acquire_buffer(&self) -> Option<FixedBuffer> {
-        self.reactor.acquire_buffer()
+    pub async fn acquire_buffer(&self) -> FixedBuffer {
+        self.reactor.acquire_buffer().await
     }
 }
