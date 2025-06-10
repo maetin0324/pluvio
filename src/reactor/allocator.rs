@@ -65,7 +65,6 @@ struct LazyAcquireState {
 
 /// Allocator for fixed buffers registered with io_uring.
 pub struct FixedBufferAllocator {
-    free_indices: RefCell<Vec<usize>>,
     // Each buffer is wrapped in a Mutex to allow mutable access concurrently.
     buffers: RefCell<Vec<FixedBufferInner>>,
 
@@ -102,10 +101,8 @@ impl FixedBufferAllocator {
                 .register_buffers(&iovecs)
                 .expect("Failed to register buffers");
         }
-        // All indices are initially free.
-        let free_indices = (0..queue_size).rev().collect();
+
         Rc::new(FixedBufferAllocator {
-            free_indices: RefCell::new(free_indices),
             buffers: RefCell::new(buffers),
             acquire_queue: RefCell::new(VecDeque::new()),
         })
@@ -158,12 +155,6 @@ impl FixedBufferAllocator {
     //             .expect("Failed to register buffers");
     //     }
     // }
-
-    /// Returns a buffer (given by its index) back to the free pool.
-    fn release(&self, index: usize) {
-        let mut free = self.free_indices.borrow_mut();
-        free.push(index);
-    }
 
     // Grants mutable access to the buffer by its index.
     // pub fn get_buffer_mut(&self, index: usize) -> std::cell::RefMut<Box<[u8]>> {
