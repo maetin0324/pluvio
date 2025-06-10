@@ -257,6 +257,12 @@ impl FixedBuffer {
     pub fn index(&self) -> usize {
         self.buffer.as_ref().map_or(0, |buf| buf.index)
     }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.buffer
+            .as_mut()
+            .map_or(&mut [], |buf| &mut buf.buffer[..])
+    }
 }
 
 impl Drop for FixedBuffer {
