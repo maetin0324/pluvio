@@ -1,9 +1,10 @@
 #![allow(unused_imports)]
 
 use futures::stream::StreamExt;
-use io_uring::types;
+use io_uring::{types, IoUring};
 use pluvio::executor::Runtime;
 use pluvio::io::{prepare_buffer, ReadFileFuture, WriteFileFuture};
+use pluvio::reactor::IoUringReactor;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
@@ -22,8 +23,15 @@ fn main() {
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(1024, BUFFER_SIZE, 64, 100);
-    let reactor = runtime.reactor.clone();
+    let runtime = Runtime::new(1024);
+    let reactor = IoUringReactor::builder()
+        .queue_size(1024)
+        .buffer_size(BUFFER_SIZE)
+        .submit_depth(64)
+        .wait_submit_timeout(Duration::from_millis(100))
+        .wait_complete_timeout(Duration::from_millis(1000))
+        .build();
+    runtime.register_reactor("io_uring_reactor", reactor.clone());
     runtime.clone().run(async move {
         let file = File::options()
             .create(true)
@@ -35,11 +43,11 @@ fn main() {
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
-        runtime.register_file(fd);
+        reactor.register_file(fd);
 
         let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file, reactor.clone()));
 
-        let mut handles = futures::stream::FuturesUnordered::new();
+        let handles = futures::stream::FuturesUnordered::new();
         // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
         //     let buffer = vec![0x61; BUFFER_SIZE];
         //     let reactor = reactor.clone();
@@ -68,12 +76,7 @@ fn main() {
 
         tracing::debug!("all tasks added to queue");
 
-        while if let Some(_) = handles.next().await {
-            // tracing::debug!("write done");
-            true
-        } else {
-            false
-        } {}
+        futures::future::join_all(handles).await;
         tracing::debug!("task 100 stat: {:?}", runtime.get_stats_by_name("write_fixed_100"));
         tracing::debug!("execute time of all task: {}s", Duration::from_nanos(runtime.get_total_time("")).as_secs_f64());
         tracing::debug!("reactor poll time: {}s", Duration::from_nanos(runtime.get_reactor_polling_time()).as_secs_f64());

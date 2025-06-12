@@ -1,20 +1,25 @@
-pub mod builder;
 pub mod stat;
 
-use std::{cell::RefCell, future::Future, rc::Rc, task::Poll, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::HashMap, future::Future, rc::Rc, task::Poll};
 
 use slab::Slab;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     executor::stat::RuntimeStat,
-    reactor::IoUringReactor,
+    reactor::{Reactor, ReactorStatus},
     task::{JoinHandle, Task, TaskTrait},
 };
 
+struct ReactorWrapper<R> {
+    reactor: R,
+    poll_counter: Cell<usize>,
+    enable: Cell<bool>,
+}
+
 // Runtime の定義
 pub struct Runtime {
-    pub reactor: Rc<IoUringReactor>,
+    reactors: RefCell<HashMap<&'static str, ReactorWrapper<Rc<dyn Reactor>>>>,
     task_sender: Sender<usize>,
     polling_task_sender: Sender<usize>,
     pub task_receiver: Receiver<usize>,
@@ -24,24 +29,13 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(
-        queue_size: u32,
-        buffer_size: usize,
-        submit_depth: u32,
-        wait_timeout: u64,
-    ) -> Rc<Self> {
-        let reactor = Rc::new(IoUringReactor::new(
-            queue_size,
-            buffer_size,
-            submit_depth,
-            Duration::from_millis(wait_timeout),
-        ));
+    pub fn new(queue_size: u64) -> Rc<Self> {
         // allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = channel();
         let (polling_task_sender, polling_task_receiver) = channel();
         let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
         Rc::new(Runtime {
-            reactor,
+            reactors: RefCell::new(HashMap::new()),
             task_sender,
             polling_task_sender,
             task_receiver,
@@ -130,6 +124,19 @@ impl Runtime {
         handle
     }
 
+    pub fn register_reactor<R>(&self, id: &'static str, reactor: R)
+    where
+        R: Reactor + 'static,
+    {
+        let reactor_wrapper = ReactorWrapper {
+            reactor: Rc::new(reactor) as Rc<dyn Reactor>,
+            poll_counter: Cell::new(0),
+            enable: Cell::new(true),
+        };
+        self.reactors.borrow_mut().insert(id, reactor_wrapper);
+        tracing::debug!("Reactor {} registered", id);
+    }
+
     pub fn run_queue(&self) {
         // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
         // {
@@ -175,11 +182,6 @@ impl Runtime {
                 noop_counter += 1;
                 if noop_counter > 100 {
                     // tracing::trace!("No tasks for a while, sleeping...");
-                    if !self.reactor.wait_cqueue() {
-                        tracing::trace!("No tasks in cqueue, sleeping...");
-                        _nooped += 1;
-                        // std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
 
                     // if nooped > 100 {
                     //     tracing::debug!("No tasks for a while, breaking...");
@@ -188,10 +190,24 @@ impl Runtime {
                 }
             }
 
-            // Reactor の完了イベントをポーリング
-            let now = std::time::Instant::now();
-            self.reactor.poll_submit_and_completions();
-            self.stat.add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
+            // Reactorの処理
+            for (id, reactor_wrapper) in self.reactors.borrow().iter() {
+                if reactor_wrapper.enable.get() {
+                    tracing::trace!("Polling reactor: {}", id);
+                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+                        let now = std::time::Instant::now();
+                        reactor_wrapper.reactor.poll();
+                        self.stat
+                            .add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
+                        reactor_wrapper.poll_counter.set(reactor_wrapper.poll_counter.get() + 1);
+                        tracing::trace!("Reactor {} polled", id);
+                    } else {
+                        tracing::trace!("Reactor {} is not running", id);
+                    }
+                } else {
+                    tracing::trace!("Reactor {} is disabled", id);
+                }
+            }
 
             // イベントループの待機（適宜調整）
             // std::thread::sleep(std::time::Duration::from_millis(10));
@@ -218,10 +234,6 @@ impl Runtime {
         let task_slot = binding.get_mut(task_id).expect("Task not found");
         task_slot.replace(task);
         ret
-    }
-
-    pub fn register_file(&self, fd: i32) {
-        self.reactor.register_file(fd);
     }
 
     pub fn log_stat(&self) {

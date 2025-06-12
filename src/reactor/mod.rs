@@ -12,13 +12,34 @@ use std::{
 
 use io_uring::IoUring;
 
-use crate::reactor::allocator::{FixedBuffer, FixedBufferAllocator};
+use crate::reactor::{allocator::{FixedBuffer, FixedBufferAllocator}, builder::IoUringReactorBuilder};
 
 pub mod allocator;
+pub mod builder;
 
 // thread_local! {
 //     static REACTOR: std::cell::OnceCell<IoUringReactor> = std::cell::OnceCell::new();
 // }
+
+pub enum ReactorStatus {
+    Running,
+    Stopped,
+}
+
+pub trait Reactor {
+    fn poll(&self);
+    fn status(&self) -> ReactorStatus;
+}
+
+impl<R: Reactor> Reactor for Rc<R> {
+    fn poll(&self) {
+        self.as_ref().poll();
+    }
+
+    fn status(&self) -> ReactorStatus {
+        self.as_ref().status()
+    }
+}
 
 pub struct IoUringReactor {
     pub ring: Rc<RefCell<IoUring>>,
@@ -32,7 +53,8 @@ pub struct IoUringReactor {
 
 struct IoUringParams {
     submit_depth: u32,
-    wait_timeout: Duration,
+    wait_submit_timeout: Duration,
+    wait_complete_timeout: Duration,
 }
 
 pub struct HandleState<T> {
@@ -78,40 +100,8 @@ impl Future for WaitHandle {
 }
 
 impl IoUringReactor {
-    pub fn new(
-        queue_size: u32,
-        buffer_size: usize,
-        submit_depth: u32,
-        wait_timeout: Duration,
-    ) -> Self {
-        // let ring = IoUring::new(queue_size).expect("Failed to create io_uring");
-        let ring = IoUring::builder()
-            // .setup_iopoll()
-            .build(queue_size)
-            .expect("Failed to create io_uring");
-        if ring.params().is_feature_nodrop() {
-            tracing::trace!("io_uring supports IORING_FEAT_NODROP");
-        } else {
-            tracing::trace!("io_uring does not support IORING_FEAT_NODROP");
-        }
-
-        let ring = Rc::new(RefCell::new(ring));
-
-        let allocator =
-            FixedBufferAllocator::new((queue_size) as usize, buffer_size, &mut ring.borrow_mut());
-
-        IoUringReactor {
-            ring: ring,
-            completions: Rc::new(RefCell::new(HashMap::new())),
-            user_data_counter: AtomicU64::new(0),
-            allocator: allocator,
-            last_submit_time: RefCell::new(std::time::Instant::now()),
-            io_uring_params: IoUringParams {
-                submit_depth,
-                wait_timeout,
-            },
-            completed_count: Cell::new(0),
-        }
+    pub fn new() -> Rc<Self> {
+        IoUringReactorBuilder::default().build()
     }
 
     // pub fn get_or_init(
@@ -123,6 +113,10 @@ impl IoUringReactor {
     //         cell.get_or_init(move || IoUringReactor::new(queue_size, submit_depth, wait_timeout))
     //     })
     // }
+
+    pub fn builder() -> IoUringReactorBuilder {
+        IoUringReactorBuilder::new()
+    }
 
     pub fn register_io(&self, handle_state: Rc<RefCell<HandleState<i32>>>) -> u64 {
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
@@ -158,35 +152,16 @@ impl IoUringReactor {
         WaitHandle::new(handle_state)
     }
 
-    /// 完了キューをポーリングし、完了した I/O 操作を処理します。
     pub fn poll_submit_and_completions(&self) {
         let mut ring = self.ring.borrow_mut();
-        let submission = ring.submission();
 
-        // SQE の送信を行うかどうかの判定
-        // 1. submission の長さが submit_depth を超えた場合
-        // 2. submission が空でなく、前回の送信から wait_timeout を超えた場合
-        let elapsed = {
-            let last = self.last_submit_time.borrow();
-            last.elapsed()
-        };
+        // SQE の送信
+        ring.submit().expect("Failed to submit SQE");
+        // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
+        // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
-        let submission_len = submission.len();
-        if submission_len >= self.io_uring_params.submit_depth as usize
-            || (!submission.is_empty() && elapsed >= self.io_uring_params.wait_timeout)
-        {
-            tracing::trace!("submitted {} SQEs", submission.len());
-            drop(submission);
-            // SQE の送信
-            ring.submit().expect("Failed to submit SQE");
-            // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
-            // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
-
-            let mut last = self.last_submit_time.borrow_mut();
-            *last = Instant::now();
-        } else {
-            drop(submission);
-        }
+        let mut last = self.last_submit_time.borrow_mut();
+        *last = Instant::now();
 
         // CQの処理
 
@@ -268,5 +243,47 @@ impl IoUringReactor {
 
     pub fn completed_count(&self) -> u64 {
         self.completed_count.get()
+    }
+}
+
+impl Reactor for IoUringReactor {
+    fn poll(&self) {
+        self.poll_submit_and_completions();
+    }
+
+    fn status(&self) -> ReactorStatus {
+        // Runningになる条件は以下
+        // 1. submission の長さが submit_depth を超えた場合
+        // 2. submission が空でなく、前回の送信から wait_submit_timeout を超えた場合
+        // 3. 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
+        let mut ring = self.ring.borrow_mut();
+        let submission = ring.submission();
+
+        let submit_elapsed = {
+            let last = self.last_submit_time.borrow();
+            last.elapsed()
+        };
+
+        let submission_len = submission.len();
+        if submission_len >= self.io_uring_params.submit_depth as usize
+            || (!submission.is_empty()
+                && submit_elapsed >= self.io_uring_params.wait_submit_timeout)
+        {
+            return ReactorStatus::Running;
+        }
+
+        // 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
+        let completed_elapsed = {
+            let last = self.last_submit_time.borrow();
+            last.elapsed()
+        };
+
+        if self.completed_count.get() < self.user_data_counter.load(Ordering::Relaxed)
+            && completed_elapsed >= self.io_uring_params.wait_complete_timeout
+        {
+            return ReactorStatus::Running;
+        }
+        // それ以外は停止状態
+        ReactorStatus::Stopped
     }
 }
