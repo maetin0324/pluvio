@@ -1,4 +1,4 @@
-use std::{fs::File, os::fd::AsRawFd};
+use std::{fs::File, os::fd::AsRawFd, rc::Rc};
 
 use crate::reactor::{allocator::FixedBuffer, IoUringReactor};
 
@@ -6,12 +6,14 @@ use crate::reactor::{allocator::FixedBuffer, IoUringReactor};
 
 
 pub struct DmaFile {
-    pub file: File,
+    file: File,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl DmaFile {
     pub fn new(file: File) -> Self {
-        DmaFile { file }
+        let reactor = IoUringReactor::get_or_init();
+        DmaFile { file , reactor}
     }
 
     pub async fn read(&self, mut buffer: Vec<u8>,  offset: u64) -> std::io::Result<i32> {
@@ -24,9 +26,7 @@ impl DmaFile {
         .offset(offset)
         .build();
 
-        let reactor = IoUringReactor::get_or_init();
-
-        reactor.push_sqe(sqe).await
+        self.reactor.push_sqe(sqe).await
     }
 
     pub async fn write(&self, buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
@@ -39,9 +39,7 @@ impl DmaFile {
         .offset(offset)
         .build();
 
-        let reactor = IoUringReactor::get_or_init();
-
-        reactor.push_sqe(sqe).await
+        self.reactor.push_sqe(sqe).await
     }
 
     pub async fn read_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<i32> {
@@ -55,9 +53,7 @@ impl DmaFile {
         .offset(offset)
         .build();
 
-        let reactor = IoUringReactor::get_or_init();
-
-        reactor.push_sqe(sqe).await
+        self.reactor.push_sqe(sqe).await
     }
 
     pub async fn write_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<i32> {
@@ -73,13 +69,10 @@ impl DmaFile {
             .build()
         };
 
-        let reactor = IoUringReactor::get_or_init();
-
-        reactor.push_sqe(sqe).await
+        self.reactor.push_sqe(sqe).await
     }
 
     pub async fn acquire_buffer(&self) -> FixedBuffer {
-        let reactor = IoUringReactor::get_or_init();
-        reactor.acquire_buffer().await
+        self.reactor.acquire_buffer().await
     }
 }
