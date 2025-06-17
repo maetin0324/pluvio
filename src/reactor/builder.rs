@@ -70,7 +70,7 @@ impl IoUringReactorBuilder {
         let allocator =
             FixedBufferAllocator::new((self.queue_size) as usize, self.buffer_size, &mut ring.borrow_mut());
 
-        Rc::new(IoUringReactor {
+        let reactor = Rc::new(IoUringReactor {
             ring: ring,
             completions: Rc::new(RefCell::new(HashMap::new())),
             user_data_counter: AtomicU64::new(0),
@@ -82,6 +82,11 @@ impl IoUringReactorBuilder {
                 wait_complete_timeout: self.wait_complete_timeout,
             },
             completed_count: Cell::new(0),
-        })
+        });
+
+        IoUringReactor::init(reactor.clone())
+            .expect("Failed to initialize IoUringReactor");
+
+        reactor
     }
 }
