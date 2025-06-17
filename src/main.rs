@@ -3,8 +3,8 @@
 use futures::stream::StreamExt;
 use io_uring::{types, IoUring};
 use pluvio::executor::Runtime;
-use pluvio::io::{prepare_buffer, ReadFileFuture, WriteFileFuture};
-use pluvio::reactor::IoUringReactor;
+use pluvio::io::prepare_buffer;
+use pluvio::reactor::{register_file, IoUringReactor};
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
@@ -31,7 +31,8 @@ fn main() {
         .wait_submit_timeout(Duration::from_millis(10))
         .wait_complete_timeout(Duration::from_millis(30))
         .build();
-    runtime.register_reactor("io_uring_reactor", reactor.clone());
+
+    runtime.register_reactor("io_uring_reactor", reactor);
     runtime.clone().run(async move {
         let file = File::options()
             .create(true)
@@ -46,9 +47,9 @@ fn main() {
         file.set_len(TOTAL_SIZE as u64)
             .expect("Failed to set file length");
 
-        reactor.register_file(fd);
+        register_file(fd);
 
-        let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file, reactor.clone()));
+        let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file));
 
         let handles = futures::stream::FuturesUnordered::new();
         // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
