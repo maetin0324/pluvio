@@ -18,8 +18,8 @@ impl Default for IoUringReactorBuilder {
             queue_size: 1024,
             buffer_size: 4096,
             submit_depth: 64,
-            wait_submit_timeout: Duration::from_millis(100),
-            wait_complete_timeout: Duration::from_millis(1000),
+            wait_submit_timeout: Duration::from_millis(50),
+            wait_complete_timeout: Duration::from_millis(100),
         }
     }
 }
