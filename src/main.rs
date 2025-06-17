@@ -1,9 +1,10 @@
 #![allow(unused_imports)]
 
 use futures::stream::StreamExt;
-use io_uring::types;
+use io_uring::{types, IoUring};
 use pluvio::executor::Runtime;
-use pluvio::io::{prepare_buffer, write_fixed, ReadFileFuture, WriteFileFuture};
+use pluvio::io::{prepare_buffer, ReadFileFuture, WriteFileFuture};
+use pluvio::reactor::IoUringReactor;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
@@ -22,8 +23,15 @@ fn main() {
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(1024, BUFFER_SIZE, 64, 100);
-    let reactor = runtime.reactor.clone();
+    let runtime = Runtime::new(1024);
+    let reactor = IoUringReactor::builder()
+        .queue_size(2048)
+        .buffer_size(BUFFER_SIZE)
+        .submit_depth(64)
+        .wait_submit_timeout(Duration::from_millis(10))
+        .wait_complete_timeout(Duration::from_millis(30))
+        .build();
+    runtime.register_reactor("io_uring_reactor", reactor.clone());
     runtime.clone().run(async move {
         let file = File::options()
             .create(true)
@@ -35,9 +43,14 @@ fn main() {
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
 
-        runtime.register_file(fd);
+        file.set_len(TOTAL_SIZE as u64)
+            .expect("Failed to set file length");
 
-        let mut handles = futures::stream::FuturesUnordered::new();
+        reactor.register_file(fd);
+
+        let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file, reactor.clone()));
+
+        let handles = futures::stream::FuturesUnordered::new();
         // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
         //     let buffer = vec![0x61; BUFFER_SIZE];
         //     let reactor = reactor.clone();
@@ -52,12 +65,13 @@ fn main() {
 
         let now = std::time::Instant::now();
         for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            let buffer = prepare_buffer(runtime.clone().allocator.clone()).unwrap();
+            let file = dma_file.clone();
+            let buffer = file
+                .acquire_buffer().await;
             // tracing::debug!("fill buffer with 0x61");
-            let reactor = reactor.clone();
             let offset = (i * BUFFER_SIZE) as u64;
             let handle = runtime.clone().spawn_with_name(
-                write_fixed(fd, offset, buffer, reactor),
+                async move  {file.write_fixed(buffer, offset).await},
                 format!("write_fixed_{}", i),
             );
             handles.push(handle);
@@ -65,13 +79,10 @@ fn main() {
 
         tracing::debug!("all tasks added to queue");
 
-        while if let Some(_) = handles.next().await {
-            // tracing::debug!("write done");
-            true
-        } else {
-            false
-        } {}
-        tracing::debug!("task 100 stat: {:?}", runtime.get_stats_by_name("write_fixed_100"));
+        futures::future::join_all(handles).await;
+
+        let longest_task_stats = runtime.get_longest_running_task().unwrap();
+        tracing::debug!("longest task time: {:?}s", longest_task_stats.get_elapsed_real_time().unwrap().as_secs_f64());
         tracing::debug!("execute time of all task: {}s", Duration::from_nanos(runtime.get_total_time("")).as_secs_f64());
         tracing::debug!("reactor poll time: {}s", Duration::from_nanos(runtime.get_reactor_polling_time()).as_secs_f64());
         tracing::info!("write done: {:?}", now.elapsed());
