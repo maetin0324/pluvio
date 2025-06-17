@@ -75,7 +75,7 @@ impl FixedBufferAllocator {
     /// Creates a new allocator with `queue_size` buffers of `buffer_size` each.
     /// The buffers are registered with the provided `ring` as iovecs.
     pub fn new(queue_size: usize, buffer_size: usize, ring: &mut IoUring) -> Rc<Self> {
-        let queue_size = queue_size * 2;
+        let queue_size = queue_size;
         let mut buffers = Vec::with_capacity(queue_size);
         for i in 0..queue_size {
             let buf = aligned_alloc(buffer_size);

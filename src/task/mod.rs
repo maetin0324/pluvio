@@ -184,6 +184,10 @@ impl TaskTrait for Task {
         // }
         let now = std::time::Instant::now();
 
+        if let Some(task_stat) = self.task_stat.as_ref() {
+            let _ = task_stat.start_time_ns.set(now);
+        }
+
         let waker = new_waker(self.task_sender.clone(), task_id);
 
         let mut context = Context::from_waker(&waker);
@@ -198,6 +202,15 @@ impl TaskTrait for Task {
         // let _ = future_slot.as_mut().poll(&mut context);
         let ret = future_slot.as_mut().poll(&mut context);
         self.task_stat.as_ref().unwrap().add_execute_time(now.elapsed().as_nanos() as u64);
+
+        if &ret == &Poll::Ready(()) {
+            if let Some(task_stat) = self.task_stat.as_ref() {
+                let _ = task_stat.end_time_ns.set(now);
+            }
+            // tracing::debug!("Task {} completed", task_id);
+        } else {
+            // tracing::debug!("Task {} is pending", task_id);
+        }
 
         ret
     }

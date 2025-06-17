@@ -1,6 +1,12 @@
 pub mod stat;
 
-use std::{cell::{Cell, RefCell}, collections::HashMap, future::Future, rc::Rc, task::Poll};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    future::Future,
+    rc::Rc,
+    task::Poll,
+};
 
 use slab::Slab;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -142,7 +148,7 @@ impl Runtime {
         // {
         let mut noop_counter: u64 = 0;
         let mut _nooped = 0;
-        loop {
+        while self.task_pool.borrow().len() > 0 {
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
             // polling_task_receiverにあるタスクを一度に取り出して処理
@@ -199,11 +205,17 @@ impl Runtime {
                         reactor_wrapper.reactor.poll();
                         self.stat
                             .add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
-                        reactor_wrapper.poll_counter.set(reactor_wrapper.poll_counter.get() + 1);
+                        reactor_wrapper
+                            .poll_counter
+                            .set(reactor_wrapper.poll_counter.get() + 1);
                         tracing::trace!("Reactor {} polled", id);
                     } else {
                         tracing::trace!("Reactor {} is not running", id);
                     }
+                    // let now = std::time::Instant::now();
+                    // reactor_wrapper.reactor.poll();
+                    // self.stat
+                    //     .add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
                 } else {
                     tracing::trace!("Reactor {} is disabled", id);
                 }
@@ -288,6 +300,20 @@ impl Runtime {
 
     pub fn get_reactor_polling_time(&self) -> u64 {
         self.stat.pool_and_completion_time.get()
+    }
+
+    pub fn get_longest_running_task(&self) -> Option<crate::task::stat::TaskStat> {
+        let binding = self.stat.finished_task_stats.borrow();
+        let finished_stats = binding
+            .iter()
+            .filter(|stat| stat.running.get() == false)
+            .cloned()
+            .collect::<Vec<crate::task::stat::TaskStat>>();
+
+        finished_stats.into_iter().max_by_key(|stat| {
+            stat.get_elapsed_real_time()
+                .map_or(0, |d| d.as_nanos() as u64)
+        })
     }
 
     // pub fn grow_buffers(&self) {

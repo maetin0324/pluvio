@@ -25,11 +25,11 @@ fn main() {
 
     let runtime = Runtime::new(1024);
     let reactor = IoUringReactor::builder()
-        .queue_size(1024)
+        .queue_size(2048)
         .buffer_size(BUFFER_SIZE)
         .submit_depth(64)
-        .wait_submit_timeout(Duration::from_millis(100))
-        .wait_complete_timeout(Duration::from_millis(1000))
+        .wait_submit_timeout(Duration::from_millis(10))
+        .wait_complete_timeout(Duration::from_millis(30))
         .build();
     runtime.register_reactor("io_uring_reactor", reactor.clone());
     runtime.clone().run(async move {
@@ -42,6 +42,9 @@ fn main() {
             .open("/local/rmaeda/pluvio_test.txt")
             .expect("Failed to open file");
         let fd = file.as_raw_fd();
+
+        file.set_len(TOTAL_SIZE as u64)
+            .expect("Failed to set file length");
 
         reactor.register_file(fd);
 
@@ -77,7 +80,9 @@ fn main() {
         tracing::debug!("all tasks added to queue");
 
         futures::future::join_all(handles).await;
-        tracing::debug!("task 100 stat: {:?}", runtime.get_stats_by_name("write_fixed_100"));
+
+        let longest_task_stats = runtime.get_longest_running_task().unwrap();
+        tracing::debug!("longest task time: {:?}s", longest_task_stats.get_elapsed_real_time().unwrap().as_secs_f64());
         tracing::debug!("execute time of all task: {}s", Duration::from_nanos(runtime.get_total_time("")).as_secs_f64());
         tracing::debug!("reactor poll time: {}s", Duration::from_nanos(runtime.get_reactor_polling_time()).as_secs_f64());
         tracing::info!("write done: {:?}", now.elapsed());
