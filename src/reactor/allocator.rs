@@ -165,9 +165,13 @@ impl FixedBufferAllocator {
     pub fn used_buffers(&self) -> f64 {
         let (total, free) = {
             let binding = self.buffers.borrow();
-            (binding.len(), binding.capacity())
+            (binding.capacity(), binding.len())
         };
-        (total - free) as f64 / total as f64 * 100.0
+        if total == 0 {
+            0.0
+        } else {
+            (total - free) as f64 / total as f64 * 100.0
+        }
     }
 
     pub fn fill_buffers(&self, data: u8) {
