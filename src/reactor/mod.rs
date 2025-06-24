@@ -1,3 +1,8 @@
+//! Reactor implementation built on `io_uring`.
+//!
+//! The reactor is responsible for submitting and completing I/O operations
+//! and waking the associated tasks.
+
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -21,13 +26,17 @@ pub mod builder;
 //     static REACTOR: std::cell::OnceCell<IoUringReactor> = std::cell::OnceCell::new();
 // }
 
+/// Current running state of a reactor.
 pub enum ReactorStatus {
     Running,
     Stopped,
 }
 
+/// Common interface for reactor implementations.
 pub trait Reactor {
+    /// Poll the reactor for I/O events.
     fn poll(&self);
+    /// Retrieve the current [`ReactorStatus`].
     fn status(&self) -> ReactorStatus;
 }
 
@@ -41,6 +50,7 @@ impl<R: Reactor> Reactor for Rc<R> {
     }
 }
 
+/// Reactor implementation using Linux `io_uring`.
 pub struct IoUringReactor {
     pub ring: Rc<RefCell<IoUring>>,
     pub completions: Rc<RefCell<HashMap<u64, Rc<RefCell<HandleState<i32>>>>>>,
@@ -51,17 +61,20 @@ pub struct IoUringReactor {
     completed_count: Cell<u64>,
 }
 
+/// Parameters controlling io_uring behaviour.
 struct IoUringParams {
     submit_depth: u32,
     wait_submit_timeout: Duration,
     wait_complete_timeout: Duration,
 }
 
+/// State shared between the reactor and a waiting future.
 pub struct HandleState<T> {
     pub waker: RefCell<Option<std::task::Waker>>,
     pub result: RefCell<Option<std::io::Result<T>>>,
 }
 impl<T> HandleState<T> {
+    /// Create a new empty [`HandleState`].
     pub fn new() -> Self {
         HandleState {
             waker: RefCell::new(None),
@@ -70,11 +83,13 @@ impl<T> HandleState<T> {
     }
 }
 
+/// Future returned from [`IoUringReactor::push_sqe`] used to wait on completion.
 pub struct WaitHandle {
     pub handle_state: Rc<RefCell<HandleState<i32>>>,
 }
 
 impl WaitHandle {
+    /// Create a new [`WaitHandle`] from the provided state.
     pub fn new(handle_state: Rc<RefCell<HandleState<i32>>>) -> Self {
         WaitHandle { handle_state }
     }
@@ -83,6 +98,7 @@ impl WaitHandle {
 impl Future for WaitHandle {
     type Output = std::io::Result<i32>;
 
+    /// Polls the handle waiting for the underlying I/O to finish.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let handle = this.handle_state.borrow();
@@ -100,6 +116,7 @@ impl Future for WaitHandle {
 }
 
 impl IoUringReactor {
+    /// Create a reactor with default parameters.
     pub fn new() -> Rc<Self> {
         IoUringReactorBuilder::default().build()
     }
@@ -114,10 +131,12 @@ impl IoUringReactor {
     //     })
     // }
 
+    /// Start building a reactor with custom parameters.
     pub fn builder() -> IoUringReactorBuilder {
         IoUringReactorBuilder::new()
     }
 
+    /// Register a [`HandleState`] and return the associated user data value.
     pub fn register_io(&self, handle_state: Rc<RefCell<HandleState<i32>>>) -> u64 {
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
         let mut completions = self.completions.borrow_mut();
@@ -125,6 +144,7 @@ impl IoUringReactor {
         user_data
     }
 
+    /// Submit a pre-built SQE with the given user data.
     pub fn submit_io(&self, sqe: io_uring::squeue::Entry, user_data: u64) {
         tracing::trace!("Reactor::submit_io user_data: {}", user_data);
         let mut ring = self.ring.borrow_mut();
@@ -136,6 +156,7 @@ impl IoUringReactor {
         }
     }
 
+    /// Push an SQE to the ring and return a [`WaitHandle`] for its completion.
     pub fn push_sqe(&self, sqe: io_uring::squeue::Entry) -> WaitHandle {
         let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
         let handle_state = Rc::new(RefCell::new(HandleState::new()));
@@ -152,6 +173,7 @@ impl IoUringReactor {
         WaitHandle::new(handle_state)
     }
 
+    /// Submit all pending SQEs and process completions.
     pub fn poll_submit_and_completions(&self) {
         let mut ring = self.ring.borrow_mut();
 
@@ -204,15 +226,18 @@ impl IoUringReactor {
         //
     }
 
+    /// Acquire a fixed buffer from the internal allocator.
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.allocator.acquire().await
     }
 
+    /// Returns `true` if there are no pending completions.
     pub fn is_empty(&self) -> bool {
         let completions = self.completions.borrow_mut();
         completions.is_empty()
     }
 
+    /// Register a file descriptor with the ring for fixed file operations.
     pub fn register_file(&self, fd: i32) {
         let ring = self.ring.borrow_mut();
         ring.submitter()
@@ -220,6 +245,7 @@ impl IoUringReactor {
             .expect("Failed to register file");
     }
 
+    /// Output debug information about submitted and completed operations.
     pub fn completion_debug_info(&self) {
         tracing::debug!(
             "submitted_count: {}",
@@ -228,6 +254,7 @@ impl IoUringReactor {
         tracing::debug!("completed_count: {}", self.completed_count.get());
     }
 
+    /// Blockingly wait for at least one completion.
     pub fn wait_cqueue(&self) -> bool {
         let ring = self.ring.borrow_mut();
         // 完了数が発行数より少ない場合にio_uring_enterを実行
@@ -241,6 +268,7 @@ impl IoUringReactor {
         true
     }
 
+    /// Number of completions processed by this reactor.
     pub fn completed_count(&self) -> u64 {
         self.completed_count.get()
     }

@@ -1,3 +1,9 @@
+//! Task executor for the pluvio runtime.
+//!
+//! This module contains the [`Runtime`] which schedules tasks and polls
+//! registered reactors. It also provides statistics utilities used to
+//! inspect running tasks.
+
 pub mod stat;
 
 use std::{
@@ -17,13 +23,17 @@ use crate::{
     task::{JoinHandle, Task, TaskTrait},
 };
 
+/// Internal wrapper used to keep state for a registered reactor.
 struct ReactorWrapper<R> {
+    /// The reactor instance.
     reactor: R,
+    /// Number of times the reactor has been polled.
     poll_counter: Cell<usize>,
+    /// Whether this reactor is currently enabled.
     enable: Cell<bool>,
 }
 
-// Runtime の定義
+/// Asynchronous task runtime that manages reactors and tasks.
 pub struct Runtime {
     reactors: RefCell<HashMap<&'static str, ReactorWrapper<Rc<dyn Reactor>>>>,
     task_sender: Sender<usize>,
@@ -35,6 +45,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    /// Creates a new runtime with an internal task queue of `queue_size`.
     pub fn new(queue_size: u64) -> Rc<Self> {
         // allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = channel();
@@ -51,6 +62,8 @@ impl Runtime {
         })
     }
 
+    /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
+    /// its result.
     pub fn spawn<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -69,6 +82,7 @@ impl Runtime {
         handle
     }
 
+    /// Spawn a task that will be polled in a dedicated polling queue.
     pub fn spawn_polling<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -90,6 +104,7 @@ impl Runtime {
         handle
     }
 
+    /// Spawn a task and associate a name with it for statistics.
     pub fn spawn_with_name<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -109,6 +124,8 @@ impl Runtime {
         handle
     }
 
+    /// Spawn a task to the polling queue with a specific name for
+    /// statistics purposes.
     pub fn spawn_polling_with_name<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -130,6 +147,7 @@ impl Runtime {
         handle
     }
 
+    /// Register a reactor instance with this runtime.
     pub fn register_reactor<R>(&self, id: &'static str, reactor: R)
     where
         R: Reactor + 'static,
@@ -143,6 +161,7 @@ impl Runtime {
         tracing::debug!("Reactor {} registered", id);
     }
 
+    /// Run tasks until the task pool becomes empty.
     pub fn run_queue(&self) {
         // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
         // {
@@ -226,6 +245,7 @@ impl Runtime {
         }
     }
 
+    /// Run the provided future to completion, driving the event loop.
     pub fn run<F, T>(&self, future: F)
     where
         F: Future<Output = T> + 'static,
@@ -235,6 +255,7 @@ impl Runtime {
         self.run_queue();
     }
 
+    /// Poll a single task by its id.
     pub fn poll_task(&self, task_id: usize) -> Poll<()> {
         let mut binding = self.task_pool.borrow_mut();
         let task_slot = binding.get_mut(task_id).expect("Task not found");
@@ -248,6 +269,7 @@ impl Runtime {
         ret
     }
 
+    /// Output runtime statistics to the log.
     pub fn log_stat(&self) {
         let binding = self.task_pool.borrow();
         let running_task_stats = binding
@@ -258,6 +280,7 @@ impl Runtime {
         tracing::debug!("Runtime Stats: {:?}", self.stat);
     }
 
+    /// Retrieve statistics for tasks that contain the specified name.
     pub fn get_stats_by_name(&self, name: &str) -> Vec<crate::task::stat::TaskStat> {
         let binding = self.task_pool.borrow();
         let running_stats = binding
@@ -288,6 +311,7 @@ impl Runtime {
         all_stats
     }
 
+    /// Get the total execution time for tasks whose name matches `name`.
     pub fn get_total_time(&self, name: &str) -> u64 {
         let binding = self.stat.finished_task_stats.borrow();
         let total_time = binding
@@ -298,10 +322,12 @@ impl Runtime {
         total_time
     }
 
+    /// Total time spent polling reactors in nanoseconds.
     pub fn get_reactor_polling_time(&self) -> u64 {
         self.stat.pool_and_completion_time.get()
     }
 
+    /// Return statistics of the task that took the longest real time.
     pub fn get_longest_running_task(&self) -> Option<crate::task::stat::TaskStat> {
         let binding = self.stat.finished_task_stats.borrow();
         let finished_stats = binding

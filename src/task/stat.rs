@@ -1,7 +1,10 @@
+//! Statistics tracking for individual tasks.
+
 use std::cell::Cell;
 
 
 #[derive(Clone)]
+/// Execution statistics for a [`Task`](crate::task::Task).
 pub struct TaskStat {
     pub task_name: Option<String>,
     pub execute_time_ns: Cell<u64>,
@@ -11,6 +14,7 @@ pub struct TaskStat {
 }
 
 impl TaskStat {
+    /// Create a new statistic record for a task.
     pub fn new(task_name: Option<String>) -> Self {
         TaskStat {
             task_name,
@@ -21,15 +25,18 @@ impl TaskStat {
         }
     }
 
+    /// Add execution time in nanoseconds to the total.
     pub fn add_execute_time(&self, time_ns: u64) {
         let current_time = self.execute_time_ns.get();
         self.execute_time_ns.set(current_time + time_ns);
     }
 
+    /// Get the total execution time in nanoseconds.
     pub fn get_execute_time(&self) -> u64 {
         self.execute_time_ns.get()
     }
 
+    /// Real time between the first poll and completion of the task.
     pub fn get_elapsed_real_time(&self) -> Option<std::time::Duration> {
         if let (Some(start), Some(end)) = (self.start_time_ns.get(), self.end_time_ns.get()) {
             Some(end.duration_since(*start))

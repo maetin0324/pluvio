@@ -1,5 +1,8 @@
+//! Custom waker used by [`Task`](crate::task::Task).
+
 use std::{rc::Rc, sync::mpsc::Sender, task::{RawWaker, RawWakerVTable, Waker}};
 
+/// Internal waker data used to reschedule tasks on the runtime.
 #[derive(Debug)]
 struct PluvioWaker {
     task_id: usize,
@@ -48,6 +51,7 @@ fn get_vtable() -> &'static RawWakerVTable {
     &RawWakerVTable::new(clone_raw, wake_raw, wake_by_ref_raw, drop_raw)
 }
 
+/// Create a [`Waker`] that requeues the task onto the runtime.
 pub(crate) fn new_waker(sender: Sender<usize>, id: usize) -> Waker {
     let pluvio_waker = PluvioWaker {
         task_id: id,

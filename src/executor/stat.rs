@@ -1,6 +1,11 @@
+//! Statistics utilities for the [`Runtime`](crate::executor::Runtime).
+//!
+//! This module tracks execution time of tasks and reactor polling.
+
 use std::cell::{Cell, RefCell};
 use crate::task::{stat::TaskStat, Task};
 
+/// Runtime wide statistics collected during execution.
 #[derive(Debug)]
 pub struct RuntimeStat {
     pub(crate) finished_task_stats: RefCell<Vec<TaskStat>>,
@@ -8,6 +13,7 @@ pub struct RuntimeStat {
 }
 
 impl RuntimeStat {
+    /// Create an empty [`RuntimeStat`].
     pub fn new() -> Self {
         RuntimeStat {
             finished_task_stats: RefCell::new(Vec::new()),
@@ -15,6 +21,7 @@ impl RuntimeStat {
         }
     }
 
+    /// Record statistics of a finished task.
     pub fn add_task_stat(&self, task: Option<&mut Option<Task>>) {
         let task_stat = match task {
             Some(Some(t)) => {
@@ -26,6 +33,7 @@ impl RuntimeStat {
         self.finished_task_stats.borrow_mut().push(task_stat);
     }
 
+    /// Accumulate time spent polling reactors and completing I/O.
     pub fn add_pool_and_completion_time(&self, time: u64) {
         let current_time = self.pool_and_completion_time.get();
         self.pool_and_completion_time.set(current_time + time);

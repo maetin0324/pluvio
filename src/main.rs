@@ -1,3 +1,4 @@
+//! Example binary demonstrating the pluvio runtime.
 #![allow(unused_imports)]
 
 use futures::stream::StreamExt;
@@ -15,6 +16,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 static TOTAL_SIZE: usize = 128 * 1024 * 1024 * 1024;
 static BUFFER_SIZE: usize = 1024 * 1024;
 
+/// Entry point of the example application.
 fn main() {
     tracing_subscriber::registry()
         .with(
@@ -94,6 +96,7 @@ fn main() {
     });
 }
 
+/// Example async function.
 async fn _p() {
     println!("Hello, world!");
 }
@@ -104,6 +107,7 @@ pub struct CountFuture {
 }
 
 impl CountFuture {
+    /// Create a future that resolves after a number of polls.
     pub fn new(complete_count: u32) -> Self {
         CountFuture {
             count: 0,

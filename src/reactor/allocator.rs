@@ -1,3 +1,8 @@
+//! Fixed buffer allocator used with `io_uring` operations.
+//!
+//! Buffers are pre-registered with the kernel so operations such as
+//! [`ReadFixed`](io_uring::opcode::ReadFixed) can be used efficiently.
+
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -13,6 +18,7 @@ use libc::iovec;
 
 pub const ALIGN: usize = 4096;
 #[repr(align(4096))]
+/// Simple wrapper to ensure buffers are 4096 byte aligned.
 pub struct AlignedBuffer {
     pub data: [u8; 4096],
 }
@@ -23,6 +29,7 @@ impl Default for AlignedBuffer {
     }
 }
 
+/// Future returned by [`FixedBufferAllocator::acquire`] to lazily obtain a buffer.
 pub struct LazyAcquire {
     state: Rc<RefCell<LazyAcquireState>>,
     allocator: Rc<FixedBufferAllocator>,
@@ -51,6 +58,7 @@ impl Future for LazyAcquire {
 }
 
 impl LazyAcquire {
+    /// Create a new [`LazyAcquire`] associated with an allocator.
     pub fn new(allocator: Rc<FixedBufferAllocator>) -> Self {
         LazyAcquire {
             state: Rc::new(RefCell::new(LazyAcquireState { waker: None })),
@@ -59,6 +67,7 @@ impl LazyAcquire {
     }
 }
 
+/// Internal state held for tasks waiting on a buffer.
 struct LazyAcquireState {
     waker: Option<std::task::Waker>,
 }
@@ -110,10 +119,12 @@ impl FixedBufferAllocator {
     }
 
     /// Acquires an available buffer. Returns a WriteFixedBuffer handle.
+    /// Acquire a buffer asynchronously.
     pub async fn acquire(self: &Rc<Self>) -> FixedBuffer {
         LazyAcquire::new(Rc::clone(self)).await
     }
 
+    /// Try to acquire a buffer without waiting.
     fn acquire_inner(self: &Rc<Self>) -> Option<FixedBuffer> {
         let mut buffers = self.buffers.borrow_mut();
         buffers.pop().map(|fixed_buf| {
@@ -162,6 +173,7 @@ impl FixedBufferAllocator {
     //     std::cell::RefMut::map(self.buffers[index].borrow_mut(), |buf| &mut **buf)
     // }
 
+    /// Percentage of buffers currently in use.
     pub fn used_buffers(&self) -> f64 {
         let (total, free) = {
             let binding = self.buffers.borrow();
@@ -174,6 +186,7 @@ impl FixedBufferAllocator {
         }
     }
 
+    /// Fill all buffers with the provided byte value.
     pub fn fill_buffers(&self, data: u8) {
         let mut binding = self.buffers.borrow_mut();
         for buf in binding.iter_mut() {
@@ -234,11 +247,13 @@ impl Drop for FixedBufferAllocator {
 //     }
 // }
 
+/// Handle for a registered fixed buffer.
 pub struct FixedBuffer {
     pub buffer: Option<FixedBufferInner>,
     pub allocator: Rc<FixedBufferAllocator>,
 }
 
+/// Inner representation of a fixed buffer returned to the allocator.
 pub struct FixedBufferInner {
     pub buffer: ManuallyDrop<Box<[u8]>>,
     pub index: usize,
@@ -249,20 +264,24 @@ impl FixedBuffer {
     //     self.allocator.get_buffer_mut(self.index)
     // }
 
+    /// Pointer to the start of the buffer.
     pub fn as_ptr(&self) -> *const u8 {
         self.buffer.as_ref().map_or(std::ptr::null(), |buf| {
             buf.buffer.as_ptr()
         })
     }
 
+    /// Length of the buffer in bytes.
     pub fn len(&self) -> usize {
         self.buffer.as_ref().map_or(0, |buf| buf.buffer.len())
     }
 
+    /// Index of this buffer within the allocator.
     pub fn index(&self) -> usize {
         self.buffer.as_ref().map_or(0, |buf| buf.index)
     }
 
+    /// Mutable slice to the underlying memory region.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.buffer
             .as_mut()
@@ -291,6 +310,7 @@ impl Drop for FixedBuffer {
 }
 
 
+/// Allocate a buffer aligned to [`ALIGN`].
 fn aligned_alloc(size: usize) -> Box<[u8]> {
     unsafe {
         // 余りを切り上げながら4096で割る

@@ -1,3 +1,8 @@
+//! Asynchronous I/O helpers used by the runtime.
+//!
+//! This module provides future types for reading and writing files using
+//! `io_uring` as well as utilities for acquiring registered buffers.
+
 use crate::reactor::{HandleState, IoUringReactor};
 use crate::reactor::allocator::{FixedBuffer, FixedBufferAllocator};
 use io_uring::types;
@@ -11,6 +16,7 @@ use std::task::{Context, Poll};
 pub mod file;
 
 
+/// Future returned by [`DmaFile::read`](file::DmaFile::read).
 pub struct ReadFileFuture {
     handle_state: Rc<RefCell<HandleState<i32>>>,
     fd: i32,
@@ -20,6 +26,7 @@ pub struct ReadFileFuture {
 }
 
 impl ReadFileFuture {
+    /// Create a new read operation for the given file descriptor.
     pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<IoUringReactor>) -> Self {
         ReadFileFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
@@ -82,6 +89,7 @@ impl Future for ReadFileFuture {
     }
 }
 
+/// Future returned by [`DmaFile::write`](file::DmaFile::write).
 pub struct WriteFileFuture {
     handle_state: Rc<RefCell<HandleState<i32>>>,
     fd: i32,
@@ -91,6 +99,7 @@ pub struct WriteFileFuture {
 }
 
 impl WriteFileFuture {
+    /// Create a new write operation for the given file descriptor.
     pub fn new(fd: i32, buffer: Vec<u8>, offset: u64, reactor: Rc<IoUringReactor>) -> Self {
         WriteFileFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
@@ -155,6 +164,7 @@ impl Future for WriteFileFuture {
     }
 }
 
+/// Future returned by [`DmaFile::write_fixed`](file::DmaFile::write_fixed).
 pub struct WriteFixedFuture {
     handle_state: Rc<RefCell<HandleState<i32>>>,
     sqe: io_uring::squeue::Entry,
@@ -162,6 +172,7 @@ pub struct WriteFixedFuture {
 }
 
 impl WriteFixedFuture {
+    /// Create a new write-fixed operation from a prepared SQE.
     pub fn new(sqe: io_uring::squeue::Entry, reactor: Rc<IoUringReactor>) -> Self {
         WriteFixedFuture {
             handle_state: Rc::new(RefCell::new(HandleState::new())),
@@ -205,6 +216,7 @@ impl Future for WriteFixedFuture {
     }
 }
 
+/// Acquire a fixed buffer from the provided allocator.
 pub async fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> FixedBuffer {
     allocator.acquire().await
 }
