@@ -6,13 +6,14 @@ use crate::reactor::{allocator::FixedBuffer, IoUringReactor};
 
 
 pub struct DmaFile {
-    pub file: File,
-    pub reactor: Rc<IoUringReactor>,
+    file: File,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl DmaFile {
-    pub fn new(file: File, reactor: Rc<IoUringReactor>) -> Self {
-        DmaFile { file, reactor }
+    pub fn new(file: File) -> Self {
+        let reactor = IoUringReactor::get_or_init();
+        DmaFile { file , reactor}
     }
 
     pub async fn read(&self, mut buffer: Vec<u8>,  offset: u64) -> std::io::Result<i32> {
