@@ -1,3 +1,8 @@
+//! Task abstractions used by the [`Runtime`](crate::executor::Runtime).
+//!
+//! This module provides the [`Task`] type, its associated statistics and the
+//! [`JoinHandle`] returned when spawning tasks.
+
 pub mod stat;
 mod waker;
 
@@ -14,6 +19,7 @@ use crate::task::stat::TaskStat;
 use crate::task::waker::new_waker;
 
 // SharedState の定義
+/// Shared state between a running task and its [`JoinHandle`].
 #[derive(Debug)]
 pub struct SharedState {
     pub waker: RefCell<Option<Waker>>,
@@ -27,6 +33,7 @@ impl Default for SharedState {
 }
 
 impl SharedState {
+    /// Create a new empty [`SharedState`].
     pub fn new() -> Self {
         SharedState {
             waker: RefCell::new(None),
@@ -34,11 +41,14 @@ impl SharedState {
         }
     }
 
+    /// Wrap the state in an `Rc<RefCell<...>>` for sharing.
     pub fn new_with_wrapped() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self::new()))
     }
 }
 
+/// Handle returned from [`Runtime::spawn`](crate::executor::Runtime::spawn) that
+/// allows awaiting the output of a task.
 pub struct JoinHandle<T> {
     pub shared_state: Rc<RefCell<SharedState>>,
     pub type_data: std::marker::PhantomData<T>,
@@ -50,6 +60,7 @@ where
 {
     type Output = Result<T, String>;
 
+    /// Poll the underlying task and return its result when ready.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let shared = self.shared_state.borrow_mut();
 
@@ -78,7 +89,7 @@ where
     }
 }
 
-// Task 構造体の定義
+/// Internal representation of a spawned task.
 pub struct Task {
     pub future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
     pub task_sender: Sender<usize>,
@@ -87,6 +98,7 @@ pub struct Task {
 }
 
 impl Task {
+    /// Create a new task from a future.
     pub fn new(
         future: Rc<RefCell<Pin<Box<dyn Future<Output = ()> + 'static>>>>,
         task_sender: Sender<usize>,
@@ -101,6 +113,7 @@ impl Task {
         }
     }
 
+    /// Wrap a future into a [`Task`] and return it with a [`JoinHandle`].
     pub fn create_task_and_handle<F, T>(
         future: F,
         sender: Sender<usize>,
@@ -168,12 +181,15 @@ impl std::fmt::Debug for Task {
     }
 }
 
+/// Trait implemented by runnable tasks.
 pub trait TaskTrait {
+    /// Poll the task once and return its progress.
     fn poll_task(self: &Self, task_id: usize) -> std::task::Poll<()>;
     // fn schedule(self: Rc<Self>);
 }
 
 impl TaskTrait for Task {
+    /// Poll the future contained in this task and reschedule if pending.
     fn poll_task(self: &Self, task_id: usize) -> std::task::Poll<()> {
         // let waker: Waker;
         // if let None = self.shared_state.borrow().waker.borrow().as_ref() {
