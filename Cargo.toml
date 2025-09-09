@@ -1,16 +1,16 @@
-[package]
-name = "pluvio"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "3"
+members = [
+    "pluvio_runtime",
+    "pluvio_uring",
+    "pluvio_ucx", "example/uring_example",
+]
 
-[dependencies]
-futures = "0.3.31"
-futures-lite = "2.6.0"
-io-uring = "0.7.3"
-libc = "0.2.169"
-slab = "0.4.9"
+exclude = [
+    "examples/*",
+    "tests/*",
+]
+
+[workspace.dependencies]
 tracing = "0.1.41"
 tracing-subscriber = {version = "0.3.19", features = ["env-filter"]}
-
-[dev-dependencies]
-

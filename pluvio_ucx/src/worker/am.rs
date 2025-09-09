@@ -1,0 +1,79 @@
+use crate::worker::{endpoint::Endpoint, Worker};
+
+pub struct AmStream<'a> {
+    stream: async_ucx::ucp::AmStream<'a>,
+    worker: &'a Worker,
+    id: u16,
+}
+
+impl Worker {
+    pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, async_ucx::Error> {
+        let res = self.worker.am_stream(id);
+
+        match res {
+            Ok(stream) => {
+                self.listener_ids.borrow_mut().insert(id.to_string());
+                Ok(AmStream {
+                    stream,
+                    worker: self,
+                    id,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl Endpoint {
+    pub async fn am_send(
+        &self,
+        id: u32,
+        header: &[u8],
+        data: &[u8],
+        need_reply: bool,
+        proto: Option<async_ucx::ucp::AmProto>,
+    ) -> Result<(), async_ucx::Error> {
+        self.worker.activate();
+        let ret = self
+            .endpoint
+            .am_send(id, header, data, need_reply, proto)
+            .await;
+        self.worker.deactivate();
+        ret
+    }
+
+    pub async fn am_send_vectorized(
+        &self,
+        id: u32,
+        header: &[u8],
+        iov: &[std::io::IoSlice<'_>],
+        need_reply: bool,
+        proto: Option<async_ucx::ucp::AmProto>,
+    ) -> Result<(), async_ucx::Error> {
+        self.worker.activate();
+        let ret = self
+            .endpoint
+            .am_send_vectorized(id, header, iov, need_reply, proto)
+            .await;
+        self.worker.deactivate();
+        ret
+    }
+}
+
+impl AmStream<'_> {
+    pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
+        self.stream.wait_msg().await
+    }
+}
+
+impl Drop for AmStream<'_> {
+    fn drop(&mut self) {
+        {
+            self.worker
+                .listener_ids
+                .borrow_mut()
+                .remove(&self.id.to_string());
+        }
+        self.worker.deactivate();
+    }
+}

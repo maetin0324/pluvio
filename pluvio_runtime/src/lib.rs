@@ -6,8 +6,6 @@
 
 /// Task executor and runtime utilities.
 pub mod executor;
-/// Asynchronous file and buffer helpers.
-pub mod io;
 /// Reactor implementation based on `io_uring`.
 pub mod reactor;
 /// Task abstraction and waker utilities.
