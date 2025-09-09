@@ -10,6 +10,7 @@ pub struct TaskStat {
     pub running: Cell<bool>,
 }
 
+
 impl TaskStat {
     pub fn new(task_name: Option<String>) -> Self {
         TaskStat {
