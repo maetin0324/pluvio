@@ -17,14 +17,17 @@ use std::{
 
 use io_uring::IoUring;
 
-use crate::reactor::{allocator::{FixedBuffer, FixedBufferAllocator}, builder::IoUringReactorBuilder};
+use crate::reactor::{
+    allocator::{FixedBuffer, FixedBufferAllocator},
+    builder::IoUringReactorBuilder,
+};
 
 pub mod allocator;
 pub mod builder;
 
-// thread_local! {
-//     static REACTOR: std::cell::OnceCell<IoUringReactor> = std::cell::OnceCell::new();
-// }
+thread_local! {
+    static IOURING_REACTOR: std::cell::OnceCell<Rc<IoUringReactor>> = std::cell::OnceCell::new();
+}
 
 /// Current running state of a reactor.
 pub enum ReactorStatus {
@@ -121,39 +124,22 @@ impl IoUringReactor {
         IoUringReactorBuilder::default().build()
     }
 
-    // pub fn get_or_init(
-    //     queue_size: u32,
-    //     submit_depth: u32,
-    //     wait_timeout: Duration,
-    // ) -> &IoUringReactor {
-    //     REACTOR.with(|cell| {
-    //         cell.get_or_init(move || IoUringReactor::new(queue_size, submit_depth, wait_timeout))
-    //     })
-    // }
+    pub fn init(reactor: Rc<Self>) -> Result<(), String> {
+        IOURING_REACTOR.with(|cell| {
+            cell.set(reactor)
+                .map_err(|_| "Failed to set IoUringReactor in thread local storage".to_string())
+        })
+    }
 
-    /// Start building a reactor with custom parameters.
+    pub fn get_or_init() -> Rc<IoUringReactor> {
+        IOURING_REACTOR.with(|cell| {
+            let reactor_ref = cell.get_or_init(move || IoUringReactorBuilder::default().build());
+            reactor_ref.clone()
+        })
+    }
+
     pub fn builder() -> IoUringReactorBuilder {
         IoUringReactorBuilder::new()
-    }
-
-    /// Register a [`HandleState`] and return the associated user data value.
-    pub fn register_io(&self, handle_state: Rc<RefCell<HandleState<i32>>>) -> u64 {
-        let user_data = self.user_data_counter.fetch_add(1, Ordering::Relaxed);
-        let mut completions = self.completions.borrow_mut();
-        completions.insert(user_data, handle_state);
-        user_data
-    }
-
-    /// Submit a pre-built SQE with the given user data.
-    pub fn submit_io(&self, sqe: io_uring::squeue::Entry, user_data: u64) {
-        tracing::trace!("Reactor::submit_io user_data: {}", user_data);
-        let mut ring = self.ring.borrow_mut();
-        unsafe {
-            let sqe = sqe.user_data(user_data);
-            ring.submission()
-                .push(&sqe)
-                .expect("Submission queue is full");
-        }
     }
 
     /// Push an SQE to the ring and return a [`WaitHandle`] for its completion.
@@ -237,15 +223,6 @@ impl IoUringReactor {
         completions.is_empty()
     }
 
-    /// Register a file descriptor with the ring for fixed file operations.
-    pub fn register_file(&self, fd: i32) {
-        let ring = self.ring.borrow_mut();
-        ring.submitter()
-            .register_files(&[fd])
-            .expect("Failed to register file");
-    }
-
-    /// Output debug information about submitted and completed operations.
     pub fn completion_debug_info(&self) {
         tracing::debug!(
             "submitted_count: {}",
@@ -272,6 +249,14 @@ impl IoUringReactor {
     pub fn completed_count(&self) -> u64 {
         self.completed_count.get()
     }
+}
+
+pub fn register_file(fd: i32) {
+    let reactor = IoUringReactor::get_or_init();
+    let ring = reactor.ring.borrow_mut();
+    ring.submitter()
+        .register_files(&[fd])
+        .expect("Failed to register file");
 }
 
 impl Reactor for IoUringReactor {

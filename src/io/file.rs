@@ -11,14 +11,15 @@ use crate::reactor::{allocator::FixedBuffer, IoUringReactor};
 
 /// Wrapper around [`File`] that performs DMA capable I/O via `io_uring`.
 pub struct DmaFile {
-    pub file: File,
-    pub reactor: Rc<IoUringReactor>,
+    file: File,
+    reactor: Rc<IoUringReactor>,
 }
 
 impl DmaFile {
     /// Create a new `DmaFile` backed by `file` and associated reactor.
-    pub fn new(file: File, reactor: Rc<IoUringReactor>) -> Self {
-        DmaFile { file, reactor }
+    pub fn new(file: File) -> Self {
+        let reactor = IoUringReactor::get_or_init();
+        DmaFile { file , reactor}
     }
 
     /// Read into the provided buffer at the given offset.

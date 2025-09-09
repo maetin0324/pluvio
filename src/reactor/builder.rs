@@ -23,8 +23,8 @@ impl Default for IoUringReactorBuilder {
             queue_size: 1024,
             buffer_size: 4096,
             submit_depth: 64,
-            wait_submit_timeout: Duration::from_millis(100),
-            wait_complete_timeout: Duration::from_millis(1000),
+            wait_submit_timeout: Duration::from_millis(50),
+            wait_complete_timeout: Duration::from_millis(100),
         }
     }
 }
@@ -82,7 +82,7 @@ impl IoUringReactorBuilder {
         let allocator =
             FixedBufferAllocator::new((self.queue_size) as usize, self.buffer_size, &mut ring.borrow_mut());
 
-        Rc::new(IoUringReactor {
+        let reactor = Rc::new(IoUringReactor {
             ring: ring,
             completions: Rc::new(RefCell::new(HashMap::new())),
             user_data_counter: AtomicU64::new(0),
@@ -94,6 +94,11 @@ impl IoUringReactorBuilder {
                 wait_complete_timeout: self.wait_complete_timeout,
             },
             completed_count: Cell::new(0),
-        })
+        });
+
+        IoUringReactor::init(reactor.clone())
+            .expect("Failed to initialize IoUringReactor");
+
+        reactor
     }
 }

@@ -13,6 +13,7 @@ pub struct TaskStat {
     pub running: Cell<bool>,
 }
 
+
 impl TaskStat {
     /// Create a new statistic record for a task.
     pub fn new(task_name: Option<String>) -> Self {
