@@ -4,7 +4,7 @@
 
 use std::{fs::File, os::fd::AsRawFd, rc::Rc};
 
-use crate::reactor::{allocator::FixedBuffer, IoUringReactor};
+use crate::{allocator::FixedBuffer, reactor::IoUringReactor};
 
 
 

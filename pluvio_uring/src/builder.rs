@@ -6,7 +6,7 @@ use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::atomic::Ato
 
 use io_uring::IoUring;
 
-use crate::reactor::{allocator::FixedBufferAllocator, IoUringParams, IoUringReactor};
+use crate::{allocator::FixedBufferAllocator, reactor::{IoUringParams, IoUringReactor}};
 
 /// Configures parameters for a new [`IoUringReactor`].
 pub struct IoUringReactorBuilder {

@@ -1,13 +1,11 @@
 [package]
-name = "pluvio"
+name = "pluvio_runtime"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 futures = "0.3.31"
 futures-lite = "2.6.0"
-io-uring = "0.7.3"
-libc = "0.2.169"
 slab = "0.4.9"
 tracing = {workspace = true}
 tracing-subscriber = {workspace = true, features = ["env-filter"]}

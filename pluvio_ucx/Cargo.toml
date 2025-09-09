@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 async-ucx = { git = "https://github.com/madsys-dev/async-ucx.git", branch = "main", features = ["am"] }
-pluvio = { path = "../pluvio_runtime" }
+pluvio_runtime = { path = "../pluvio_runtime" }
 slab = "0.4.10"

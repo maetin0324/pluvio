@@ -3,6 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use slab::Slab;
 
 use crate::worker::Worker;
+use pluvio_runtime::reactor::{Reactor, ReactorStatus};
 
 thread_local! {
     pub static PLUVIO_UCX_REACTOR: std::cell::OnceCell<Rc<UCXReactor>> = std::cell::OnceCell::new();
@@ -32,14 +33,14 @@ impl UCXReactor {
     }
 }
 
-impl pluvio::reactor::Reactor for UCXReactor {
-    fn status(&self) -> pluvio::reactor::ReactorStatus {
+impl pluvio_runtime::reactor::Reactor for UCXReactor {
+    fn status(&self) -> ReactorStatus {
         self.registered_workers
             .borrow()
             .iter()
             .any(|(_, worker)| worker.state() != crate::worker::WorkerState::Inactive)
-            .then(|| pluvio::reactor::ReactorStatus::Running)
-            .unwrap_or(pluvio::reactor::ReactorStatus::Stopped)
+            .then(|| ReactorStatus::Running)
+            .unwrap_or(ReactorStatus::Stopped)
     }
 
     fn poll(&self) {

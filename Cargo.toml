@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "pluvio_runtime",
     "pluvio_uring",
-    "pluvio_ucx", "example/uring_example",
+    "pluvio_ucx",
 ]
 
 exclude = [
