@@ -2,10 +2,10 @@
 #![allow(unused_imports)]
 
 use futures::stream::StreamExt;
-use io_uring::{types, IoUring};
-use pluvio::executor::Runtime;
-use pluvio::io::prepare_buffer;
-use pluvio::reactor::{register_file, IoUringReactor};
+use pluvio_runtime::executor::Runtime;
+use pluvio_uring::file::DmaFile;
+use pluvio_uring::prepare_buffer;
+use pluvio_uring::reactor::{register_file, IoUringReactor};
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{fs::File, os::fd::AsRawFd, sync::Arc};
@@ -14,7 +14,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static TOTAL_SIZE: usize = 128 * 1024 * 1024 * 1024;
-static BUFFER_SIZE: usize = 1024 * 1024;
+static BUFFER_SIZE: usize = 1 << 20; // 1 MiB
 
 /// Entry point of the example application.
 fn main() {
@@ -30,8 +30,8 @@ fn main() {
         .queue_size(2048)
         .buffer_size(BUFFER_SIZE)
         .submit_depth(64)
-        .wait_submit_timeout(Duration::from_millis(10))
-        .wait_complete_timeout(Duration::from_millis(30))
+        .wait_submit_timeout(Duration::from_millis(100))
+        .wait_complete_timeout(Duration::from_millis(150))
         .build();
 
     runtime.register_reactor("io_uring_reactor", reactor);
@@ -51,7 +51,9 @@ fn main() {
 
         register_file(fd);
 
-        let dma_file = std::rc::Rc::new(pluvio::io::file::DmaFile::new(file));
+        let dma_file = std::rc::Rc::new(DmaFile::new(file));
+
+        dma_file.fallocate(TOTAL_SIZE as u64).await.expect("fallocate failed");
 
         let handles = futures::stream::FuturesUnordered::new();
         // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
@@ -97,41 +99,3 @@ fn main() {
     });
 }
 
-/// Example async function.
-async fn _p() {
-    println!("Hello, world!");
-}
-
-pub struct CountFuture {
-    count: u32,
-    complete_count: u32,
-}
-
-impl CountFuture {
-    /// Create a future that resolves after a number of polls.
-    pub fn new(complete_count: u32) -> Self {
-        CountFuture {
-            count: 0,
-            complete_count,
-        }
-    }
-}
-
-impl std::future::Future for CountFuture {
-    type Output = u32;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = self.get_mut();
-        this.count += 1;
-        if this.count < this.complete_count {
-            cx.waker().wake_by_ref();
-            std::task::Poll::Pending
-        } else {
-            println!("CountFuture is ready with value: {}", this.count);
-            std::task::Poll::Ready(this.count)
-        }
-    }
-}

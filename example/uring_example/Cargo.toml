@@ -3,4 +3,13 @@ name = "uring_example"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+debug = true
+
 [dependencies]
+futures = "0.3.31"
+libc = "0.2.175"
+pluvio_runtime = { path = "../../pluvio_runtime" }
+pluvio_uring = { path = "../../pluvio_uring" }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

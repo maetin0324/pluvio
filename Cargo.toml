@@ -7,9 +7,13 @@ members = [
 ]
 
 exclude = [
-    "examples/*",
-    "tests/*",
+    "example/uring_example",
 ]
+
+[package]
+name = "pluvio"
+version = "0.1.0"
+edition = "2024"
 
 [workspace.dependencies]
 tracing = "0.1.41"
