@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use slab::Slab;
 
 use crate::worker::Worker;
-use pluvio_runtime::reactor::{Reactor, ReactorStatus};
+use pluvio_runtime::reactor::ReactorStatus;
 
 thread_local! {
     pub static PLUVIO_UCX_REACTOR: std::cell::OnceCell<Rc<UCXReactor>> = std::cell::OnceCell::new();

@@ -13,7 +13,7 @@ use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 128 * 1024 * 1024 * 1024;
+static TOTAL_SIZE: usize = 128 << 30;
 static BUFFER_SIZE: usize = 1 << 20; // 1 MiB
 
 /// Entry point of the example application.
