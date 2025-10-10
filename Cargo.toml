@@ -3,12 +3,12 @@ resolver = "3"
 members = [
     "pluvio_runtime",
     "pluvio_uring",
-    "pluvio_ucx", "example/ucx_example",
+    "pluvio_ucx",
 ]
 
 exclude = [
-    "example/uring_example",
-    "example/ucx_example",
+    "examples/uring_example",
+    "examples/ucx_example",
 ]
 
 [package]

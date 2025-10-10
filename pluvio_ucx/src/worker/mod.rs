@@ -138,7 +138,9 @@ impl Worker {
         self: &Rc<Self>,
         addr: SocketAddr,
     ) -> Result<endpoint::Endpoint, async_ucx::Error> {
+        self.activate();
         let ret = self.worker.connect_socket(addr).await;
+        self.deactivate();
         match ret {
             Ok(endpoint) => Ok(endpoint::Endpoint {
                 endpoint,
@@ -152,7 +154,9 @@ impl Worker {
         self: &Rc<Self>,
         connection: async_ucx::ucp::ConnectionRequest,
     ) -> Result<endpoint::Endpoint, async_ucx::Error> {
+        self.activate();
         let ret = self.worker.accept(connection).await;
+        self.deactivate();
         match ret {
             Ok(endpoint) => Ok(endpoint::Endpoint {
                 endpoint,
@@ -197,8 +201,8 @@ impl Worker {
     }
 }
 
-impl Drop for Worker {
-    fn drop(&mut self) {
-        UCXReactor::current().unregister_worker(self.id.get());
-    }
-}
+// impl Drop for Worker {
+//     fn drop(&mut self) {
+//         UCXReactor::current().unregister_worker(self.id.get());
+//     }
+// }

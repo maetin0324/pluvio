@@ -1,13 +1,15 @@
+use std::rc::Rc;
+
 use crate::worker::{endpoint::Endpoint, Worker};
 
-pub struct AmStream<'a> {
-    stream: async_ucx::ucp::AmStream<'a>,
-    worker: &'a Worker,
+pub struct AmStream {
+    stream: async_ucx::ucp::AmStream,
+    worker: Rc<Worker>,
     id: u16,
 }
 
 impl Worker {
-    pub fn am_stream(&self, id: u16) -> Result<AmStream<'_>, async_ucx::Error> {
+    pub fn am_stream(self: &Rc<Self>, id: u16) -> Result<AmStream, async_ucx::Error> {
         let res = self.worker.am_stream(id);
 
         match res {
@@ -15,7 +17,7 @@ impl Worker {
                 self.listener_ids.borrow_mut().insert(id.to_string());
                 Ok(AmStream {
                     stream,
-                    worker: self,
+                    worker: self.clone(),
                     id,
                 })
             }
@@ -60,13 +62,13 @@ impl Endpoint {
     }
 }
 
-impl AmStream<'_> {
+impl AmStream {
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
         self.stream.wait_msg().await
     }
 }
 
-impl Drop for AmStream<'_> {
+impl Drop for AmStream {
     fn drop(&mut self) {
         {
             self.worker

@@ -45,6 +45,7 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
 
     fn poll(&self) {
         for (_, worker) in self.registered_workers.borrow().iter() {
+            // tracing::trace!("UCXReactor: polling worker");
             worker.inner().progress();
         }
     }

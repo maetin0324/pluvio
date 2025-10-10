@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.99"
+futures = "0.3.31"
+pluvio_runtime = { path = "../../pluvio_runtime" }
+pluvio_ucx = { path = "../../pluvio_ucx" }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
