@@ -29,7 +29,7 @@ dependencies = [
 [[package]]
 name = "async-ucx"
 version = "0.1.1"
-source = "git+https://github.com/maetin0324/async-ucx.git?branch=main#51f3e97abfda1f04d4d4653e6998770c64eac726"
+source = "git+https://github.com/maetin0324/async-ucx.git?branch=main#329f618d955639664a901d6dd4a9b4d86b5734eb"
 dependencies = [
  "crossbeam",
  "derivative",
@@ -204,7 +204,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -650,7 +650,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -831,7 +831,7 @@ dependencies = [
 [[package]]
 name = "ucx1-sys"
 version = "0.1.0"
-source = "git+https://github.com/maetin0324/async-ucx.git?branch=main#51f3e97abfda1f04d4d4653e6998770c64eac726"
+source = "git+https://github.com/maetin0324/async-ucx.git?branch=main#329f618d955639664a901d6dd4a9b4d86b5734eb"
 dependencies = [
  "bindgen",
 ]

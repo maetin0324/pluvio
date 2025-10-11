@@ -62,6 +62,18 @@ impl Runtime {
         })
     }
 
+    pub fn set_affinity(&self, cpu_id: usize) {
+        #[cfg(target_os = "linux")]
+        {
+            core_affinity::get_core_ids()
+                .and_then(|core_ids| core_ids.into_iter().find(|c| c.id == cpu_id))
+                .map(|core| {
+                    core_affinity::set_for_current(core);
+                    tracing::info!("Set runtime affinity to CPU {}", cpu_id);
+                });
+        }
+    }
+
     /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
     /// its result.
     pub fn spawn<F, T>(&self, future: F) -> JoinHandle<T>

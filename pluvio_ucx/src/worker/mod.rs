@@ -33,6 +33,8 @@ pub struct Worker {
     listener_ids: RefCell<HashSet<String>>,
 }
 
+pub type WorkerAddressInner = async_ucx::ucp::WorkerAddressInner;
+
 impl Context {
     pub fn new() -> Result<Self, async_ucx::Error> {
         let context = async_ucx::ucp::Context::new()?;
@@ -122,7 +124,7 @@ impl Worker {
 
     pub fn connect_addr(
         self: &Rc<Self>,
-        addr: &async_ucx::ucp::WorkerAddress,
+        addr: &WorkerAddressInner,
     ) -> Result<endpoint::Endpoint, async_ucx::Error> {
         let ret = self.worker.connect_addr(addr);
         match ret {
