@@ -13,7 +13,7 @@ use std::{future::Future, pin::Pin, task::Waker};
 // use std::io::Result;
 // use crossbeam_channel::Sender;
 use std::any::Any;
-use std::sync::mpsc::Sender;
+use crate::executor::spsc::Sender;
 
 use crate::task::stat::TaskStat;
 use crate::task::waker::new_waker;

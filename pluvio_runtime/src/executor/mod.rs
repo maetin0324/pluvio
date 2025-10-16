@@ -5,6 +5,7 @@
 //! inspect running tasks.
 
 pub mod stat;
+pub mod spsc;
 
 use std::{
     cell::{Cell, RefCell},
@@ -15,7 +16,8 @@ use std::{
 };
 
 use slab::Slab;
-use std::sync::mpsc::{channel, Receiver, Sender};
+// use std::sync::mpsc::{channel, Receiver, Sender};
+use crate::executor::spsc::{unbounded, Receiver, Sender};
 
 use crate::{
     executor::stat::RuntimeStat,
@@ -48,8 +50,8 @@ impl Runtime {
     /// Creates a new runtime with an internal task queue of `queue_size`.
     pub fn new(queue_size: u64) -> Rc<Self> {
         // allocator.fill_buffers(0x61);
-        let (task_sender, task_receiver) = channel();
-        let (polling_task_sender, polling_task_receiver) = channel();
+        let (task_sender, task_receiver) = unbounded();
+        let (polling_task_sender, polling_task_receiver) = unbounded();
         let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
         Rc::new(Runtime {
             reactors: RefCell::new(HashMap::new()),

@@ -64,7 +64,10 @@ impl Endpoint {
 
 impl AmStream {
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
-        self.stream.wait_msg().await
+        self.worker.wait_connect();
+        let ret = self.stream.wait_msg().await;
+        self.worker.deactivate();
+        ret
     }
 }
 
