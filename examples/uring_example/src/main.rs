@@ -76,7 +76,10 @@ fn main() {
             // tracing::debug!("fill buffer with 0x61");
             let offset = (i * BUFFER_SIZE) as u64;
             let handle = runtime.clone().spawn_with_name(
-                async move  {file.write_fixed(buffer, offset).await},
+                async move  {
+                    // write_fixed now returns (bytes_written, buffer)
+                    file.write_fixed(buffer, offset).await.map(|(bytes, _buf)| bytes)
+                },
                 format!("write_fixed_{}", i),
             );
             handles.push(handle);
