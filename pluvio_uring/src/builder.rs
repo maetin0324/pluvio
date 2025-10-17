@@ -2,11 +2,20 @@
 //!
 //! Allows configuring queue sizes and timeouts before constructing the reactor.
 
-use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::atomic::AtomicU64, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::atomic::AtomicU64,
+    time::Duration,
+};
 
 use io_uring::IoUring;
 
-use crate::{allocator::FixedBufferAllocator, reactor::{IoUringParams, IoUringReactor}};
+use crate::{
+    allocator::FixedBufferAllocator,
+    reactor::{IoUringParams, IoUringReactor},
+};
 
 /// Configures parameters for a new [`IoUringReactor`].
 pub struct IoUringReactorBuilder {
@@ -79,8 +88,11 @@ impl IoUringReactorBuilder {
 
         let ring = Rc::new(RefCell::new(ring));
 
-        let allocator =
-            FixedBufferAllocator::new((self.queue_size) as usize, self.buffer_size, &mut ring.borrow_mut());
+        let allocator = FixedBufferAllocator::new(
+            (self.queue_size) as usize,
+            self.buffer_size,
+            &mut ring.borrow_mut(),
+        );
 
         let reactor = Rc::new(IoUringReactor {
             ring: ring,
@@ -96,8 +108,7 @@ impl IoUringReactorBuilder {
             completed_count: Cell::new(0),
         });
 
-        IoUringReactor::init(reactor.clone())
-            .expect("Failed to initialize IoUringReactor");
+        IoUringReactor::init(reactor.clone()).expect("Failed to initialize IoUringReactor");
 
         reactor
     }

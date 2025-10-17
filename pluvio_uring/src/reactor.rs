@@ -1,10 +1,20 @@
-use std::{cell::{Cell, RefCell}, collections::HashMap, pin::Pin, rc::Rc, sync::atomic::AtomicU64, task::{Context, Poll}, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    pin::Pin,
+    rc::Rc,
+    sync::atomic::AtomicU64,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use io_uring::IoUring;
 use pluvio_runtime::reactor::ReactorStatus;
 
-use crate::{allocator::{FixedBuffer, FixedBufferAllocator}, builder::IoUringReactorBuilder};
-
+use crate::{
+    allocator::{FixedBuffer, FixedBufferAllocator},
+    builder::IoUringReactorBuilder,
+};
 
 thread_local! {
     static IOURING_REACTOR: std::cell::OnceCell<Rc<IoUringReactor>> = std::cell::OnceCell::new();
@@ -101,7 +111,9 @@ impl IoUringReactor {
 
     /// Push an SQE to the ring and return a [`WaitHandle`] for its completion.
     pub fn push_sqe(&self, sqe: io_uring::squeue::Entry) -> WaitHandle {
-        let user_data = self.user_data_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let user_data = self
+            .user_data_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let handle_state = Rc::new(RefCell::new(HandleState::new()));
         let mut completions = self.completions.borrow_mut();
         completions.insert(user_data, handle_state.clone());
@@ -183,7 +195,8 @@ impl IoUringReactor {
     pub fn completion_debug_info(&self) {
         tracing::debug!(
             "submitted_count: {}",
-            self.user_data_counter.load(std::sync::atomic::Ordering::Relaxed)
+            self.user_data_counter
+                .load(std::sync::atomic::Ordering::Relaxed)
         );
         tracing::debug!("completed_count: {}", self.completed_count.get());
     }
@@ -193,7 +206,9 @@ impl IoUringReactor {
         let ring = self.ring.borrow_mut();
         // 完了数が発行数より少ない場合にio_uring_enterを実行
         let completed_count = self.completed_count.get();
-        let submitted_count = self.user_data_counter.load(std::sync::atomic::Ordering::Relaxed);
+        let submitted_count = self
+            .user_data_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
         if completed_count >= submitted_count {
             return false;
         }
@@ -248,7 +263,10 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
             last.elapsed()
         };
 
-        if self.completed_count.get() < self.user_data_counter.load(std::sync::atomic::Ordering::Relaxed)
+        if self.completed_count.get()
+            < self
+                .user_data_counter
+                .load(std::sync::atomic::Ordering::Relaxed)
             && completed_elapsed >= self.io_uring_params.wait_complete_timeout
         {
             return ReactorStatus::Running;

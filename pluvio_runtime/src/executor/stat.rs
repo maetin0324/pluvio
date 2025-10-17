@@ -2,8 +2,8 @@
 //!
 //! This module tracks execution time of tasks and reactor polling.
 
-use std::cell::{Cell, RefCell};
 use crate::task::{stat::TaskStat, Task};
+use std::cell::{Cell, RefCell};
 
 /// Runtime wide statistics collected during execution.
 #[derive(Debug)]
@@ -24,9 +24,7 @@ impl RuntimeStat {
     /// Record statistics of a finished task.
     pub fn add_task_stat(&self, task: Option<&mut Option<Task>>) {
         let task_stat = match task {
-            Some(Some(t)) => {
-                t.task_stat.take().unwrap()
-            },
+            Some(Some(t)) => t.task_stat.take().unwrap(),
             _ => return,
         };
         task_stat.running.set(false);

@@ -76,12 +76,14 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
         self.registered_workers
             .borrow()
             .iter()
-            .any(|(_, worker)| matches!(worker.state(), crate::worker::WorkerState::Active | crate::worker::WorkerState::WaitConnect))
-            .then(|| {
-                ReactorStatus::Running
+            .any(|(_, worker)| {
+                matches!(
+                    worker.state(),
+                    crate::worker::WorkerState::Active | crate::worker::WorkerState::WaitConnect
+                )
             })
+            .then(|| ReactorStatus::Running)
             .unwrap_or(ReactorStatus::Stopped)
-
     }
 
     fn poll(&self) {

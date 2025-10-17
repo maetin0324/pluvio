@@ -1,7 +1,10 @@
 //! Custom waker used by [`Task`](crate::task::Task).
 
-use std::{rc::Rc, task::{RawWaker, RawWakerVTable, Waker}};
 use crate::executor::spsc::Sender;
+use std::{
+    rc::Rc,
+    task::{RawWaker, RawWakerVTable, Waker},
+};
 
 /// Internal waker data used to reschedule tasks on the runtime.
 #[derive(Debug)]

@@ -2,9 +2,6 @@ use std::rc::Rc;
 
 use crate::worker::{endpoint::Endpoint, Worker};
 
-pub type AmProto = async_ucx::ucp::AmProto;
-pub type AmMsg = async_ucx::ucp::AmMsg;
-pub type AmDataType = async_ucx::ucp::AmDataType;
 pub type AmStreamInner = async_ucx::ucp::AmStream;
 
 pub struct AmStream {
@@ -38,7 +35,7 @@ impl Endpoint {
         header: &[u8],
         data: &[u8],
         need_reply: bool,
-        proto: Option<AmProto>,
+        proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
         self.worker.activate();
         let ret = self
@@ -55,7 +52,7 @@ impl Endpoint {
         header: &[u8],
         iov: &[std::io::IoSlice<'_>],
         need_reply: bool,
-        proto: Option<AmProto>,
+        proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
         self.worker.activate();
         let ret = self
@@ -68,7 +65,7 @@ impl Endpoint {
 }
 
 impl AmStream {
-    pub async fn wait_msg(&self) -> Option<AmMsg> {
+    pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
         self.worker.wait_connect();
         let ret = self.stream.wait_msg().await;
         self.worker.deactivate();

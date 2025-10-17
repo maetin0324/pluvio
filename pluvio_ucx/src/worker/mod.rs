@@ -14,7 +14,6 @@ pub mod am;
 pub mod endpoint;
 pub mod listener;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
     Active,

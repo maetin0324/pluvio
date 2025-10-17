@@ -4,8 +4,8 @@
 //! registered reactors. It also provides statistics utilities used to
 //! inspect running tasks.
 
-pub mod stat;
 pub mod spsc;
+pub mod stat;
 
 use std::{
     cell::{Cell, RefCell},

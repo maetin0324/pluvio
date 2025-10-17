@@ -49,7 +49,10 @@ impl Future for LazyAcquire {
             }
             // Add the state to the acquire queue.
             {
-                this.allocator.acquire_queue.borrow_mut().push_back(state_clone);
+                this.allocator
+                    .acquire_queue
+                    .borrow_mut()
+                    .push_back(state_clone);
             }
 
             Poll::Pending
@@ -266,9 +269,9 @@ impl FixedBuffer {
 
     /// Pointer to the start of the buffer.
     pub fn as_ptr(&self) -> *const u8 {
-        self.buffer.as_ref().map_or(std::ptr::null(), |buf| {
-            buf.buffer.as_ptr()
-        })
+        self.buffer
+            .as_ref()
+            .map_or(std::ptr::null(), |buf| buf.buffer.as_ptr())
     }
 
     /// Length of the buffer in bytes.
@@ -308,7 +311,6 @@ impl Drop for FixedBuffer {
         }
     }
 }
-
 
 /// Allocate a buffer aligned to [`ALIGN`].
 fn aligned_alloc(size: usize) -> Box<[u8]> {

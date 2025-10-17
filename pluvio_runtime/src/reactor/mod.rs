@@ -5,9 +5,6 @@
 
 use std::rc::Rc;
 
-
-
-
 /// Current running state of a reactor.
 pub enum ReactorStatus {
     Running,
@@ -31,5 +28,3 @@ impl<R: Reactor> Reactor for Rc<R> {
         self.as_ref().status()
     }
 }
-
-

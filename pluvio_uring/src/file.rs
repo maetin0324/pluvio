@@ -6,9 +6,6 @@ use std::{fs::File, os::fd::AsRawFd, rc::Rc};
 
 use crate::{allocator::FixedBuffer, reactor::IoUringReactor};
 
-
-
-
 /// Wrapper around [`File`] that performs DMA capable I/O via `io_uring`.
 pub struct DmaFile {
     file: File,
@@ -19,11 +16,11 @@ impl DmaFile {
     /// Create a new `DmaFile` backed by `file` and associated reactor.
     pub fn new(file: File) -> Self {
         let reactor = IoUringReactor::get_or_init();
-        DmaFile { file , reactor}
+        DmaFile { file, reactor }
     }
 
     /// Read into the provided buffer at the given offset.
-    pub async fn read(&self, mut buffer: Vec<u8>,  offset: u64) -> std::io::Result<i32> {
+    pub async fn read(&self, mut buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Read::new(
             io_uring::types::Fd(fd),
@@ -68,7 +65,7 @@ impl DmaFile {
     /// Perform a `WriteFixed` using a pre-registered buffer.
     pub async fn write_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
-        let sqe = { 
+        let sqe = {
             io_uring::opcode::WriteFixed::new(
                 io_uring::types::Fd(fd),
                 buffer.as_ptr(),
@@ -84,11 +81,7 @@ impl DmaFile {
 
     pub async fn fallocate(&self, size: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
-        let sqe = io_uring::opcode::Fallocate::new(
-            io_uring::types::Fd(fd),
-            size,
-        )
-        .build();
+        let sqe = io_uring::opcode::Fallocate::new(io_uring::types::Fd(fd), size).build();
 
         self.reactor.push_sqe(sqe).await
     }

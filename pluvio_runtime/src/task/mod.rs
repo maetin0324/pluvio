@@ -12,8 +12,8 @@ use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin, task::Waker};
 // use std::io::Result;
 // use crossbeam_channel::Sender;
-use std::any::Any;
 use crate::executor::spsc::Sender;
+use std::any::Any;
 
 use crate::task::stat::TaskStat;
 use crate::task::waker::new_waker;
@@ -217,7 +217,10 @@ impl TaskTrait for Task {
 
         // let _ = future_slot.as_mut().poll(&mut context);
         let ret = future_slot.as_mut().poll(&mut context);
-        self.task_stat.as_ref().unwrap().add_execute_time(now.elapsed().as_nanos() as u64);
+        self.task_stat
+            .as_ref()
+            .unwrap()
+            .add_execute_time(now.elapsed().as_nanos() as u64);
 
         if &ret == &Poll::Ready(()) {
             if let Some(task_stat) = self.task_stat.as_ref() {
@@ -237,5 +240,3 @@ impl TaskTrait for Task {
     //         .expect("Failed to send task");
     // }
 }
-
-

@@ -2,7 +2,6 @@
 
 use std::cell::Cell;
 
-
 #[derive(Clone)]
 /// Execution statistics for a [`Task`](crate::task::Task).
 pub struct TaskStat {
@@ -12,7 +11,6 @@ pub struct TaskStat {
     pub end_time_ns: std::cell::OnceCell<std::time::Instant>,
     pub running: Cell<bool>,
 }
-
 
 impl TaskStat {
     /// Create a new statistic record for a task.
@@ -55,4 +53,3 @@ impl std::fmt::Debug for TaskStat {
             .finish()
     }
 }
-
