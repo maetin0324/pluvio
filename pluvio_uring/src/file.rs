@@ -94,6 +94,20 @@ impl DmaFile {
         self.reactor.push_sqe(sqe).await
     }
 
+    pub async fn fsync(&self) -> std::io::Result<i32> {
+        let fd = self.file.as_raw_fd();
+        let sqe = io_uring::opcode::Fsync::new(io_uring::types::Fd(fd)).build();
+
+        self.reactor.push_sqe(sqe).await
+    }
+
+    pub async fn close(&self) -> std::io::Result<i32> {
+        let fd = self.file.as_raw_fd();
+        let sqe = io_uring::opcode::Close::new(io_uring::types::Fd(fd)).build();
+
+        self.reactor.push_sqe(sqe).await
+    }
+
     /// Acquire a fixed buffer from the reactor's allocator.
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.reactor.acquire_buffer().await
