@@ -182,6 +182,20 @@ impl Runtime {
         let mut noop_counter: u64 = 0;
         let mut _nooped = 0;
         while self.task_pool.borrow().len() > 0 {
+            // IMPORTANT: Poll reactors FIRST to receive messages and wake tasks
+            // This ensures that when a message arrives, tasks are woken immediately
+            // and can be processed in the same iteration
+            for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
+                if reactor_wrapper.enable.get() {
+                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+                        reactor_wrapper.reactor.poll();
+                        reactor_wrapper
+                            .poll_counter
+                            .set(reactor_wrapper.poll_counter.get() + 1);
+                    }
+                }
+            }
+
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
             // polling_task_receiverにあるタスクを一度に取り出して処理
@@ -203,21 +217,14 @@ impl Runtime {
 
             if let Ok(task_id) = task_id_slot {
                 // タスクを取得してポーリング
-                tracing::trace!("Runtime::run_queue task_id: {}", task_id);
                 if let Poll::Ready(_) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
 
                     binding.remove(task_id);
-                    tracing::trace!(
-                        "Task {} completed, remaining tasks: {}",
-                        task_id,
-                        binding.len()
-                    );
                 }
             } else {
-                tracing::trace!("No task to poll");
                 noop_counter += 1;
                 if noop_counter > 100 {
                     // tracing::trace!("No tasks for a while, sleeping...");
@@ -226,31 +233,6 @@ impl Runtime {
                     //     tracing::debug!("No tasks for a while, breaking...");
                     //     break;
                     // }
-                }
-            }
-
-            // Reactorの処理
-            for (id, reactor_wrapper) in self.reactors.borrow().iter() {
-                if reactor_wrapper.enable.get() {
-                    tracing::trace!("Polling reactor: {}", id);
-                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
-                        let now = std::time::Instant::now();
-                        reactor_wrapper.reactor.poll();
-                        self.stat
-                            .add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
-                        reactor_wrapper
-                            .poll_counter
-                            .set(reactor_wrapper.poll_counter.get() + 1);
-                        tracing::trace!("Reactor {} polled", id);
-                    } else {
-                        tracing::trace!("Reactor {} is not running", id);
-                    }
-                    // let now = std::time::Instant::now();
-                    // reactor_wrapper.reactor.poll();
-                    // self.stat
-                    //     .add_pool_and_completion_time(now.elapsed().as_nanos() as u64);
-                } else {
-                    tracing::trace!("Reactor {} is disabled", id);
                 }
             }
 
