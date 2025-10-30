@@ -30,6 +30,7 @@ pub struct Worker {
     worker: Rc<async_ucx::ucp::Worker>,
     state: Cell<WorkerState>,
     listener_ids: RefCell<HashSet<String>>,
+    wait_connect_start: Cell<Option<std::time::Instant>>,
 }
 
 pub type WorkerAddressInner = async_ucx::ucp::WorkerAddressInner;
@@ -62,6 +63,7 @@ impl Worker {
             worker,
             state: Cell::new(WorkerState::Inactive),
             listener_ids: RefCell::new(HashSet::new()),
+            wait_connect_start: Cell::new(None),
         });
         let id = UCXReactor::current().register_worker(worker.clone());
         worker.id.set(id);
@@ -74,18 +76,26 @@ impl Worker {
 
     pub fn activate(&self) {
         self.state.set(WorkerState::Active);
+        self.wait_connect_start.set(None);
     }
 
     pub fn deactivate(&self) {
         if self.listener_ids.borrow().is_empty() {
             self.state.set(WorkerState::Inactive);
+            self.wait_connect_start.set(None);
         } else {
             self.state.set(WorkerState::WaitConnect);
+            self.wait_connect_start.set(Some(std::time::Instant::now()));
         }
     }
 
     pub fn wait_connect(&self) {
         self.state.set(WorkerState::WaitConnect);
+        self.wait_connect_start.set(Some(std::time::Instant::now()));
+    }
+
+    pub fn wait_start_time(&self) -> Option<std::time::Instant> {
+        self.wait_connect_start.get()
     }
 
     pub fn inner(&self) -> &async_ucx::ucp::Worker {

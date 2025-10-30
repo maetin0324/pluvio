@@ -181,7 +181,17 @@ impl Runtime {
         // {
         let mut noop_counter: u64 = 0;
         let mut _nooped = 0;
+        let mut stuck_counter: u64 = 0;
+
+        // Read max stuck iterations from environment or use default
+        let max_stuck_iterations = std::env::var("PLUVIO_MAX_STUCK_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(10000);
+
         while self.task_pool.borrow().len() > 0 {
+            let mut made_progress = false;
+
             // IMPORTANT: Poll reactors FIRST to receive messages and wake tasks
             // This ensures that when a message arrives, tasks are woken immediately
             // and can be processed in the same iteration
@@ -192,6 +202,7 @@ impl Runtime {
                         reactor_wrapper
                             .poll_counter
                             .set(reactor_wrapper.poll_counter.get() + 1);
+                        made_progress = true;
                     }
                 }
             }
@@ -210,6 +221,7 @@ impl Runtime {
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
                     binding.remove(task_id);
+                    made_progress = true;
                 }
             }
 
@@ -223,6 +235,7 @@ impl Runtime {
                     self.stat.add_task_stat(task);
 
                     binding.remove(task_id);
+                    made_progress = true;
                 }
             } else {
                 noop_counter += 1;
@@ -234,6 +247,27 @@ impl Runtime {
                     //     break;
                     // }
                 }
+            }
+
+            // Check if runtime is stuck
+            if !made_progress {
+                stuck_counter += 1;
+                if stuck_counter > max_stuck_iterations {
+                    tracing::error!(
+                        "Runtime stuck - no reactor making progress after {} iterations. Breaking out to prevent infinite loop.",
+                        stuck_counter
+                    );
+                    break;
+                }
+                // Log periodically to help debugging
+                if stuck_counter % 1000 == 0 {
+                    tracing::warn!(
+                        "Runtime may be stuck - no progress for {} iterations",
+                        stuck_counter
+                    );
+                }
+            } else {
+                stuck_counter = 0;
             }
 
             // イベントループの待機（適宜調整）

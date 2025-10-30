@@ -13,13 +13,21 @@ thread_local! {
 pub struct UCXReactor {
     registered_workers: RefCell<Slab<Rc<Worker>>>,
     last_polled: RefCell<std::time::Instant>,
+    connection_timeout: std::time::Duration,
 }
 
 impl UCXReactor {
     pub fn new() -> Self {
+        // Read timeout from environment variable or use default of 30 seconds
+        let timeout_secs = std::env::var("PLUVIO_CONNECTION_TIMEOUT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(30);
+
         Self {
             registered_workers: RefCell::new(Slab::new()),
             last_polled: RefCell::new(std::time::Instant::now()),
+            connection_timeout: std::time::Duration::from_secs(timeout_secs),
         }
     }
 
@@ -40,10 +48,29 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
     fn status(&self) -> ReactorStatus {
         // 最適化版: bool::thenを避けて直接if-elseを使用
         let workers = self.registered_workers.borrow();
+        let now = std::time::Instant::now();
+
         for (_, worker) in workers.iter() {
             match worker.state() {
-                crate::worker::WorkerState::Active | crate::worker::WorkerState::WaitConnect => {
+                crate::worker::WorkerState::Active => {
                     return ReactorStatus::Running;
+                }
+                crate::worker::WorkerState::WaitConnect => {
+                    // Check if connection has timed out
+                    if let Some(start_time) = worker.wait_start_time() {
+                        if now.duration_since(start_time) < self.connection_timeout {
+                            return ReactorStatus::Running;
+                        } else {
+                            // Connection timed out, log warning and treat as inactive
+                            tracing::warn!(
+                                "Worker connection timed out after {:?}",
+                                self.connection_timeout
+                            );
+                        }
+                    } else {
+                        // No start time recorded, shouldn't happen but return Running to be safe
+                        return ReactorStatus::Running;
+                    }
                 }
                 crate::worker::WorkerState::Inactive => {}
             }
