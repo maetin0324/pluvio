@@ -42,7 +42,8 @@ impl Endpoint {
             .endpoint
             .am_send(id, header, data, need_reply, proto)
             .await;
-        self.worker.deactivate();
+        // Do not deactivate here - messages may still be in flight in UCX layer
+        // Let the reactor manage worker state based on actual activity
         ret
     }
 
@@ -59,7 +60,8 @@ impl Endpoint {
             .endpoint
             .am_send_vectorized(id, header, iov, need_reply, proto)
             .await;
-        self.worker.deactivate();
+        // Do not deactivate here - messages may still be in flight in UCX layer
+        // Let the reactor manage worker state based on actual activity
         ret
     }
 }

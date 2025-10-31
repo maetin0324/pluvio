@@ -135,9 +135,9 @@ impl Worker {
         self: &Rc<Self>,
         addr: &WorkerAddressInner,
     ) -> Result<endpoint::Endpoint, async_ucx::Error> {
-        self.activate();
+        // Do not activate/deactivate here - endpoint creation doesn't require state change
+        // The actual communication through the endpoint will manage worker state appropriately
         let ret = self.worker.connect_addr(addr);
-        self.deactivate();
         match ret {
             Ok(endpoint) => Ok(endpoint::Endpoint {
                 endpoint,
