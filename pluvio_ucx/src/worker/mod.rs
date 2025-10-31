@@ -135,7 +135,9 @@ impl Worker {
         self: &Rc<Self>,
         addr: &WorkerAddressInner,
     ) -> Result<endpoint::Endpoint, async_ucx::Error> {
+        self.activate();
         let ret = self.worker.connect_addr(addr);
+        self.deactivate();
         match ret {
             Ok(endpoint) => Ok(endpoint::Endpoint {
                 endpoint,
