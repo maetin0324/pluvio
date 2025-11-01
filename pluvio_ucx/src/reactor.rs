@@ -46,9 +46,7 @@ impl UCXReactor {
 
 impl pluvio_runtime::reactor::Reactor for UCXReactor {
     fn status(&self) -> ReactorStatus {
-        // 最適化版: bool::thenを避けて直接if-elseを使用
         let workers = self.registered_workers.borrow();
-        let now = std::time::Instant::now();
 
         for (_, worker) in workers.iter() {
             match worker.state() {
@@ -56,21 +54,9 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
                     return ReactorStatus::Running;
                 }
                 crate::worker::WorkerState::WaitConnect => {
-                    // Check if connection has timed out
-                    if let Some(start_time) = worker.wait_start_time() {
-                        if now.duration_since(start_time) < self.connection_timeout {
-                            return ReactorStatus::Running;
-                        } else {
-                            // Connection timed out, log warning and treat as inactive
-                            tracing::warn!(
-                                "Worker connection timed out after {:?}",
-                                self.connection_timeout
-                            );
-                        }
-                    } else {
-                        // No start time recorded, shouldn't happen but return Running to be safe
-                        return ReactorStatus::Running;
-                    }
+                    // WaitConnect state during AM stream message waiting is a normal state.
+                    // Treat it as Running to prevent spurious "Runtime stuck" errors.
+                    return ReactorStatus::Running;
                 }
                 crate::worker::WorkerState::Inactive => {}
             }
