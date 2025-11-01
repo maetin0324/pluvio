@@ -187,7 +187,10 @@ impl TimerReactor {
 impl Reactor for TimerReactor {
     fn poll(&self) {
         let timer_count = self.timer_count();
-        tracing::trace!("TimerReactor: poll() called, {} timers pending", timer_count);
+        tracing::trace!(
+            "TimerReactor: poll() called, {} timers pending",
+            timer_count
+        );
 
         let expired_count = self.wake_expired_timers(Instant::now());
 
@@ -270,7 +273,9 @@ impl std::future::Future for Delay {
                 "Delay: registering timer with deadline in {:?}",
                 self.deadline.saturating_duration_since(now)
             );
-            let handle = self.reactor.register_timer(self.deadline, cx.waker().clone());
+            let handle = self
+                .reactor
+                .register_timer(self.deadline, cx.waker().clone());
             self.timer_handle = Some(handle);
         } else {
             tracing::trace!("Delay: timer already registered, returning Pending");
@@ -343,9 +348,18 @@ mod tests {
         let now = Instant::now();
 
         // Register timers with different deadlines
-        reactor.register_timer(now + Duration::from_millis(300), futures::task::noop_waker());
-        reactor.register_timer(now + Duration::from_millis(100), futures::task::noop_waker());
-        reactor.register_timer(now + Duration::from_millis(200), futures::task::noop_waker());
+        reactor.register_timer(
+            now + Duration::from_millis(300),
+            futures::task::noop_waker(),
+        );
+        reactor.register_timer(
+            now + Duration::from_millis(100),
+            futures::task::noop_waker(),
+        );
+        reactor.register_timer(
+            now + Duration::from_millis(200),
+            futures::task::noop_waker(),
+        );
 
         assert_eq!(reactor.timer_count(), 3);
 

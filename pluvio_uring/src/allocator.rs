@@ -3,6 +3,7 @@
 //! Buffers are pre-registered with the kernel so operations such as
 //! [`ReadFixed`](io_uring::opcode::ReadFixed) can be used efficiently.
 
+use aligned_box::AlignedBox;
 use std::{
     cell::RefCell,
     collections::VecDeque,
@@ -15,19 +16,6 @@ use std::{
 
 use io_uring::IoUring;
 use libc::iovec;
-
-pub const ALIGN: usize = 4096;
-#[repr(align(4096))]
-/// Simple wrapper to ensure buffers are 4096 byte aligned.
-pub struct AlignedBuffer {
-    pub data: [u8; 4096],
-}
-
-impl Default for AlignedBuffer {
-    fn default() -> Self {
-        AlignedBuffer { data: [0; 4096] }
-    }
-}
 
 /// Future returned by [`FixedBufferAllocator::acquire`] to lazily obtain a buffer.
 pub struct LazyAcquire {
@@ -89,8 +77,9 @@ impl FixedBufferAllocator {
     pub fn new(queue_size: usize, buffer_size: usize, ring: &mut IoUring) -> Rc<Self> {
         let queue_size = queue_size;
         let mut buffers = Vec::with_capacity(queue_size);
+        let page_size = page_size();
         for i in 0..queue_size {
-            let buf = aligned_alloc(buffer_size);
+            let buf = new_aligned_buffer(page_size, buffer_size);
             let fixed_buf = FixedBufferInner {
                 buffer: ManuallyDrop::new(buf),
                 index: i,
@@ -101,10 +90,10 @@ impl FixedBufferAllocator {
         let iovecs: Vec<iovec> = buffers
             .iter()
             .map(|fixed_buf| {
-                let buf = fixed_buf.buffer.as_ref();
+                let slice = fixed_buf.as_slice();
                 iovec {
-                    iov_base: buf.as_ptr() as *mut _,
-                    iov_len: buf.len(),
+                    iov_base: slice.as_ptr() as *mut _,
+                    iov_len: slice.len(),
                 }
             })
             .collect();
@@ -139,43 +128,6 @@ impl FixedBufferAllocator {
         })
     }
 
-    // pub fn grow(&mut self, ring: &mut IoUring) {
-    //     // unregister buffers
-    //     ring.submitter()
-    //         .unregister_buffers()
-    //         .expect("Failed to unregister buffers");
-
-    //     // grow buffers
-    //     let current_len = self.buffers.len();
-    //     for _ in 0..current_len {
-    //         let buf = aligned_alloc(4096);
-    //         self.buffers.push(RefCell::new(ManuallyDrop::new(buf)));
-    //     }
-    //     // Build iovecs from the preallocated buffers.
-    //     let iovecs: Vec<iovec> = self
-    //         .buffers
-    //         .iter()
-    //         .map(|buf_mutex| {
-    //             let buf = buf_mutex.borrow_mut();
-    //             iovec {
-    //                 iov_base: buf.as_ptr() as *mut _,
-    //                 iov_len: buf.len(),
-    //             }
-    //         })
-    //         .collect();
-    //     // Register the buffers with io_uring.
-    //     unsafe {
-    //         ring.submitter()
-    //             .register_buffers(&iovecs)
-    //             .expect("Failed to register buffers");
-    //     }
-    // }
-
-    // Grants mutable access to the buffer by its index.
-    // pub fn get_buffer_mut(&self, index: usize) -> std::cell::RefMut<Box<[u8]>> {
-    //     std::cell::RefMut::map(self.buffers[index].borrow_mut(), |buf| &mut **buf)
-    // }
-
     /// Percentage of buffers currently in use.
     pub fn used_buffers(&self) -> f64 {
         let (total, free) = {
@@ -193,9 +145,8 @@ impl FixedBufferAllocator {
     pub fn fill_buffers(&self, data: u8) {
         let mut binding = self.buffers.borrow_mut();
         for buf in binding.iter_mut() {
-            let buf = buf.buffer.as_mut();
-            for i in 0..buf.len() {
-                buf[i] = data;
+            for byte in buf.as_mut_slice().iter_mut() {
+                *byte = data;
             }
         }
     }
@@ -213,42 +164,12 @@ impl Drop for FixedBufferAllocator {
     }
 }
 
-// /// Handle for a fixed buffer used in WriteFixed operations. When dropped,
-// /// it returns the buffer back to the allocator.
-// pub struct WriteFixedBuffer {
-//     index: usize,
-//     allocator: Rc<FixedBufferAllocator>,
-// }
-
-// impl WriteFixedBuffer {
-//     // Returns a mutable slice to the underlying buffer.
-//     pub fn as_mut_slice(&self) -> std::cell::RefMut<'_, Box<[u8]>> {
-//         self.allocator.get_buffer_mut(self.index)
-//     }
-
-//     /// Prepares a WriteFixed SQE for a file descriptor using this buffer.
-//     /// (Additional fields like offset and length would be set here.)
-//     pub fn prepare_sqe(&self, fd: RawFd, offset: u64) -> io_uring::squeue::Entry {
-//         // Example using io_uring opcode WriteFixed.
-//         // The index registered via io_uring_register is passed in user_data.
-//         opcode::WriteFixed::new(
-//             types::Fd(fd),
-//             self.allocator.buffers[self.index].borrow().as_ptr() as *const _,
-//             // Assuming the full length should be written.
-//             self.allocator.buffers[self.index].borrow().len() as u32,
-//             self.index as u16,
-//         )
-//         .offset(offset)
-//         .build()
-//     }
-// }
-
-// impl Drop for WriteFixedBuffer {
-//     fn drop(&mut self) {
-//         // On drop, the buffer is marked as free.
-//         self.allocator.release(self.index);
-//     }
-// }
+#[cfg(unix)]
+fn page_size() -> usize {
+    let n = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    assert!(n > 0, "sysconf(_SC_PAGESIZE) failed");
+    n as usize
+}
 
 /// Handle for a registered fixed buffer.
 pub struct FixedBuffer {
@@ -258,8 +179,18 @@ pub struct FixedBuffer {
 
 /// Inner representation of a fixed buffer returned to the allocator.
 pub struct FixedBufferInner {
-    pub buffer: ManuallyDrop<Box<[u8]>>,
+    pub buffer: ManuallyDrop<AlignedBox<[u8]>>,
     pub index: usize,
+}
+
+impl FixedBufferInner {
+    fn as_slice(&self) -> &[u8] {
+        &**self.buffer
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut **self.buffer
+    }
 }
 
 impl FixedBuffer {
@@ -271,12 +202,12 @@ impl FixedBuffer {
     pub fn as_ptr(&self) -> *const u8 {
         self.buffer
             .as_ref()
-            .map_or(std::ptr::null(), |buf| buf.buffer.as_ptr())
+            .map_or(std::ptr::null(), |buf| buf.as_slice().as_ptr())
     }
 
     /// Length of the buffer in bytes.
     pub fn len(&self) -> usize {
-        self.buffer.as_ref().map_or(0, |buf| buf.buffer.len())
+        self.buffer.as_ref().map_or(0, |buf| buf.as_slice().len())
     }
 
     /// Index of this buffer within the allocator.
@@ -288,7 +219,7 @@ impl FixedBuffer {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.buffer
             .as_mut()
-            .map_or(&mut [], |buf| &mut buf.buffer[..])
+            .map_or(&mut [], |buf| buf.as_mut_slice())
     }
 }
 
@@ -312,19 +243,12 @@ impl Drop for FixedBuffer {
     }
 }
 
-/// Allocate a buffer aligned to [`ALIGN`].
-fn aligned_alloc(size: usize) -> Box<[u8]> {
-    unsafe {
-        // 余りを切り上げながら4096で割る
-        let size = (size + ALIGN - 1) / ALIGN;
-        // メモリ確保
-        let mut vec = Vec::<AlignedBuffer>::with_capacity(size);
-        // データの書き込み
-        vec.resize_with(size, Default::default);
-        // アライン付き確保が終わったのでデータをu8にする
-        let mut data = std::mem::transmute::<_, Vec<u8>>(vec);
-        // そのままだと4096分の1の要素しかないのでメタデータを変更する
-        data.set_len(size * ALIGN);
-        data.into_boxed_slice()
-    }
+fn new_aligned_buffer(alignment: usize, len: usize) -> AlignedBox<[u8]> {
+    assert!(
+        len > 0,
+        "buffer_size must be greater than zero when allocating fixed buffers"
+    );
+
+    AlignedBox::<[u8]>::slice_from_value(alignment, len, 0u8)
+        .unwrap_or_else(|err| panic!("failed to allocate aligned buffer: {err:?}"))
 }

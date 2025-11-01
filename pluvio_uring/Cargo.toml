@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 io-uring = "0.7.3"
 libc = "0.2.169"
+aligned_box = "0.3.0"
 tracing = {workspace = true}
 pluvio_runtime = {path = "../pluvio_runtime"}

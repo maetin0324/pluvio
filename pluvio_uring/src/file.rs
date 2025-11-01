@@ -51,7 +51,11 @@ impl DmaFile {
     ///
     /// Returns a tuple of (bytes_read, buffer) so the caller can access
     /// the data read into the buffer.
-    pub async fn read_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<(i32, FixedBuffer)> {
+    pub async fn read_fixed(
+        &self,
+        buffer: FixedBuffer,
+        offset: u64,
+    ) -> std::io::Result<(i32, FixedBuffer)> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::ReadFixed::new(
             io_uring::types::Fd(fd),
@@ -70,7 +74,11 @@ impl DmaFile {
     ///
     /// Returns a tuple of (bytes_written, buffer) so the caller can
     /// reuse the buffer if needed.
-    pub async fn write_fixed(&self, buffer: FixedBuffer, offset: u64) -> std::io::Result<(i32, FixedBuffer)> {
+    pub async fn write_fixed(
+        &self,
+        buffer: FixedBuffer,
+        offset: u64,
+    ) -> std::io::Result<(i32, FixedBuffer)> {
         let fd = self.file.as_raw_fd();
         let sqe = {
             io_uring::opcode::WriteFixed::new(
