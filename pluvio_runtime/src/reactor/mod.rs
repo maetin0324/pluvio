@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Current running state of a reactor.
 pub enum ReactorStatus {
     Running,

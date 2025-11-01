@@ -552,6 +552,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pluvio_timer"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pluvio_runtime",
+ "tracing",
+]
+
+[[package]]
 name = "pluvio_ucx"
 version = "0.1.0"
 dependencies = [

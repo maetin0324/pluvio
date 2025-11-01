@@ -1,0 +1,9 @@
+[package]
+name = "pluvio_timer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pluvio_runtime = { path = "../pluvio_runtime" }
+tracing = {workspace = true}
+futures = {workspace = true}
