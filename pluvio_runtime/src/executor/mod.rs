@@ -189,6 +189,8 @@ impl Runtime {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(1000000);
 
+        let mut sleep_duration = 1;
+
         while self.task_pool.borrow().len() > 0 {
             let mut made_progress = false;
 
@@ -260,14 +262,19 @@ impl Runtime {
                     break;
                 }
                 // Log periodically to help debugging
-                if stuck_counter % 1000 == 0 {
+                if stuck_counter % 10000 == 0 {
                     tracing::warn!(
                         "Runtime may be stuck - no progress for {} iterations",
                         stuck_counter
                     );
+                    if sleep_duration < (1 << 20) {
+                        sleep_duration *= 2;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(sleep_duration));
                 }
             } else {
                 stuck_counter = 0;
+                sleep_duration = 1;
             }
 
             // イベントループの待機（適宜調整）
