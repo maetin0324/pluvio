@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "aligned_box"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ebdec4a15fc241b75eb9a55d320cef51549f95f739f8ce3dce24b19b9e5f24a"
+
+[[package]]
 name = "bitflags"
 version = "2.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -251,6 +257,7 @@ dependencies = [
 name = "pluvio_uring"
 version = "0.1.0"
 dependencies = [
+ "aligned_box",
  "io-uring",
  "libc",
  "pluvio_runtime",

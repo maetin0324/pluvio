@@ -187,7 +187,7 @@ impl Runtime {
         let max_stuck_iterations = std::env::var("PLUVIO_MAX_STUCK_ITERATIONS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(10000);
+            .unwrap_or(1000000);
 
         while self.task_pool.borrow().len() > 0 {
             let mut made_progress = false;
