@@ -177,9 +177,6 @@ impl Runtime {
 
     /// Run tasks until the task pool becomes empty.
     pub fn run_queue(&self) {
-        // while !self.task_receiver.is_empty() || !self.reactor.completions.borrow_mut().is_empty()
-        // {
-        let mut noop_counter: u64 = 0;
         let mut _nooped = 0;
         let mut stuck_counter: u64 = 0;
 
@@ -239,16 +236,6 @@ impl Runtime {
                     binding.remove(task_id);
                     made_progress = true;
                 }
-            } else {
-                noop_counter += 1;
-                if noop_counter > 100 {
-                    // tracing::trace!("No tasks for a while, sleeping...");
-
-                    // if nooped > 100 {
-                    //     tracing::debug!("No tasks for a while, breaking...");
-                    //     break;
-                    // }
-                }
             }
 
             // Check if runtime is stuck
@@ -263,11 +250,11 @@ impl Runtime {
                 }
                 // Log periodically to help debugging
                 if stuck_counter % 10000 == 0 {
-                    tracing::warn!(
+                    tracing::debug!(
                         "Runtime may be stuck - no progress for {} iterations",
                         stuck_counter
                     );
-                    if sleep_duration < (1 << 20) {
+                    if sleep_duration < (1 << 10) {
                         sleep_duration *= 2;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(sleep_duration));
