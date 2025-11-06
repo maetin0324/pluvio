@@ -370,3 +370,25 @@ impl Runtime {
 
     // }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Runtime;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn run_stops_after_simple_spawned_task() {
+        let runtime = Runtime::new(4);
+        runtime.spawn(async {});
+
+        let start = Instant::now();
+        runtime.run(async {});
+
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "Runtime::run took {:?} which exceeds the 500ms budget",
+            elapsed
+        );
+    }
+}
