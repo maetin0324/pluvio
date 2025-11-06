@@ -347,3 +347,67 @@ impl<T> Clone for Receiver<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_channel_preserves_fifo_and_capacity() {
+        let (sender, receiver) = bounded(2);
+        assert_eq!(sender.capacity(), 2);
+        assert!(sender.is_empty());
+
+        sender.try_send(10).unwrap();
+        sender.try_send(20).unwrap();
+
+        let err = sender.try_send(30).unwrap_err();
+        assert!(matches!(err, TrySendError::Full(30)));
+        assert_eq!(sender.len(), 2);
+
+        assert_eq!(receiver.try_recv().unwrap(), 10);
+        sender.try_send(30).unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), 20);
+        assert_eq!(receiver.try_recv().unwrap(), 30);
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn unbounded_channel_grows_buffer() {
+        let (sender, receiver) = unbounded();
+        let initial_capacity = sender.capacity();
+        assert!(initial_capacity >= 1);
+
+        let total_messages = initial_capacity + 5;
+        for i in 0..total_messages {
+            sender.try_send(i).unwrap();
+        }
+
+        assert!(
+            sender.capacity() > initial_capacity,
+            "capacity did not grow: {}",
+            sender.capacity()
+        );
+        assert_eq!(sender.len(), total_messages);
+
+        for i in 0..total_messages {
+            assert_eq!(receiver.try_recv().unwrap(), i);
+        }
+        assert!(receiver.is_empty());
+    }
+
+    #[test]
+    fn disconnect_propagates_errors() {
+        let (sender, receiver) = bounded::<i32>(1);
+        drop(receiver);
+        let err = sender.try_send(42).unwrap_err();
+        assert!(matches!(err, TrySendError::Disconnected(42)));
+
+        let (sender, receiver) = bounded::<i32>(1);
+        drop(sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+    }
+}
