@@ -293,6 +293,15 @@ impl Runtime {
         ret
     }
 
+    pub fn log_running_task_stat(&self) {
+        let binding = self.task_pool.borrow();
+        let running_task_stats = binding
+            .iter()
+            .filter_map(|(_, task)| task.as_ref().and_then(|t| t.task_stat.as_ref()))
+            .collect::<Vec<_>>();
+        tracing::debug!("Running Task Stats: {:?}", running_task_stats);
+    }
+
     /// Output runtime statistics to the log.
     pub fn log_stat(&self) {
         let binding = self.task_pool.borrow();

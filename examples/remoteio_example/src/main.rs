@@ -1,4 +1,4 @@
-use futures::StreamExt;
+use futures::{StreamExt, future};
 use pluvio_runtime::executor::Runtime;
 use pluvio_ucx::async_ucx::ucp::AmMsg;
 use pluvio_ucx::{UCXReactor, WorkerAddressInner};
@@ -75,7 +75,7 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
     let server_addr = std::fs::read(SHARED_FILE).unwrap();
     let worker_addr = WorkerAddressInner::from(server_addr.as_slice());
 
-    tracing::debug!("client: read server address, connect to {:?}", worker_addr);
+    tracing::debug!("client: read server address from file");
 
     let endpoint = worker.connect_addr(&worker_addr).unwrap();
 
@@ -197,14 +197,14 @@ async fn server(
 
     for i in 0..N {
         let msg = stream.wait_msg().await.unwrap();
-        if i % 10000 == 0 {
+        if i % 1024 == 0 {
             tracing::debug!("server: received {} messages", i);
         }
 
         let header = msg.header();
         let offset = usize::from_le_bytes(header[0..8].try_into().unwrap());
 
-        let jh = runtime.spawn(write_task(dma_file.clone(), offset, msg));
+        let jh = runtime.spawn_with_name(write_task(dma_file.clone(), offset, msg),format!("write_task_{}", i));
         jhs.push(jh);
         inflight += 1;
         if inflight >= WINDOW {
@@ -213,7 +213,10 @@ async fn server(
         }
     }
 
+    futures::future::join_all(jhs).await;
+
     tracing::debug!("all done");
+    runtime.log_running_task_stat();
     Ok(())
 }
 
