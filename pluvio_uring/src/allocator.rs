@@ -5,6 +5,7 @@
 
 use aligned_box::AlignedBox;
 use std::{
+    alloc::{alloc_zeroed, handle_alloc_error, Layout},
     cell::RefCell,
     collections::VecDeque,
     future::Future,
@@ -249,6 +250,16 @@ fn new_aligned_buffer(alignment: usize, len: usize) -> AlignedBox<[u8]> {
         "buffer_size must be greater than zero when allocating fixed buffers"
     );
 
-    AlignedBox::<[u8]>::slice_from_value(alignment, len, 0u8)
-        .unwrap_or_else(|err| panic!("failed to allocate aligned buffer: {err:?}"))
+    let layout = Layout::from_size_align(len, alignment)
+        .unwrap_or_else(|err| panic!("invalid layout for aligned buffer: {err:?}"));
+
+    unsafe {
+        let ptr = alloc_zeroed(layout);
+        if ptr.is_null() {
+            handle_alloc_error(layout);
+        }
+
+        let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr, len);
+        AlignedBox::<[u8]>::from_raw_parts(slice_ptr, layout)
+    }
 }
