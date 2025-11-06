@@ -37,3 +37,40 @@ impl RuntimeStat {
         self.pool_and_completion_time.set(current_time + time);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::executor::spsc::unbounded;
+    use crate::task::Task;
+
+    #[test]
+    fn add_task_stat_records_finished_tasks() {
+        let stats = RuntimeStat::new();
+        let (sender, _receiver) = unbounded::<usize>();
+        let (task_opt, _handle) =
+            Task::create_task_and_handle(async { 5usize }, sender, Some("unit".into()));
+        let mut slot = task_opt;
+        stats.add_task_stat(Some(&mut slot));
+
+        let recorded = stats.finished_task_stats.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].task_name.as_deref(), Some("unit"));
+        assert!(!recorded[0].running.get());
+    }
+
+    #[test]
+    fn add_pool_and_completion_time_accumulates() {
+        let stats = RuntimeStat::new();
+        stats.add_pool_and_completion_time(10);
+        stats.add_pool_and_completion_time(5);
+        assert_eq!(stats.pool_and_completion_time.get(), 15);
+    }
+
+    #[test]
+    fn add_task_stat_ignores_missing_entry() {
+        let stats = RuntimeStat::new();
+        stats.add_task_stat(None);
+        assert!(stats.finished_task_stats.borrow().is_empty());
+    }
+}

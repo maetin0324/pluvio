@@ -53,3 +53,28 @@ impl std::fmt::Debug for TaskStat {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn execute_time_accumulates() {
+        let stat = TaskStat::new(Some("unit".into()));
+        stat.add_execute_time(10);
+        stat.add_execute_time(5);
+        assert_eq!(stat.get_execute_time(), 15);
+    }
+
+    #[test]
+    fn elapsed_real_time_returns_duration() {
+        let stat = TaskStat::new(None);
+        let start = Instant::now();
+        let end = start + Duration::from_millis(5);
+        stat.start_time_ns.set(start).unwrap();
+        stat.end_time_ns.set(end).unwrap();
+
+        assert_eq!(stat.get_elapsed_real_time(), Some(end - start));
+    }
+}
