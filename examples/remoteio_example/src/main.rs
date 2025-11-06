@@ -16,10 +16,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 static SHARED_FILE: &str = "endpoint_info.data";
 static TARGET_FILE: &str = "/local/rmaeda/remoteio_target.data";
 
-const N: usize = 1 << 15;
-const WINDOW: usize = 2048; // まずは 512〜4096 の範囲で要実験
+static TOTAL_SIZE: usize = 1 << 37; // 128GiB
 static DATA_SIZE: usize = 1 << 20; // 1MiB
-static TOTAL_SIZE: usize = DATA_SIZE * N;
+const N: usize = TOTAL_SIZE / DATA_SIZE;
+const WINDOW: usize = 2048; // まずは 512〜4096 の範囲で要実験
 
 const REQUEST_ID: u16 = 12;
 const RESPONSE_ID: u32 = 16;
@@ -39,8 +39,8 @@ fn main() -> anyhow::Result<()> {
         .queue_size(2048)
         .buffer_size(DATA_SIZE)
         .submit_depth(64)
-        .wait_submit_timeout(Duration::from_millis(10))
-        .wait_complete_timeout(Duration::from_millis(30))
+        .wait_submit_timeout(Duration::from_millis(100))
+        .wait_complete_timeout(Duration::from_millis(300))
         .build();
     runtime.register_reactor("io_uring_reactor", uring_reactor.clone());
 
@@ -142,7 +142,7 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
     );
     tracing::info!(
         "Bandwidth: {}GB/s",
-        (DATA_SIZE * (1 << 20)) as f64 / now.elapsed().as_secs_f64() / 1e9
+        (TOTAL_SIZE as f64 / now.elapsed().as_secs_f64() / 1e9)
     );
 }
 
