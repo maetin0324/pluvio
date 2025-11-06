@@ -1,17 +1,28 @@
+use futures::StreamExt;
 use pluvio_runtime::executor::Runtime;
+use pluvio_ucx::async_ucx::ucp::AmMsg;
 use pluvio_ucx::{UCXReactor, WorkerAddressInner};
-use std::net::UdpSocket;
+use pluvio_uring::file::DmaFile;
+use pluvio_uring::reactor::{IoUringReactor, register_file};
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::rc::Rc;
+use std::time::Duration;
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static SHARED_FILE: &str = "endpoint_info.data";
+static TARGET_FILE: &str = "/local/rmaeda/remoteio_target.data";
 
 const N: usize = 1 << 15;
 const WINDOW: usize = 2048; // まずは 512〜4096 の範囲で要実験
 static DATA_SIZE: usize = 1 << 20; // 1MiB
-static HEADER: [u8; 256] = [0u8; 256];
+static TOTAL_SIZE: usize = DATA_SIZE * N;
+
+const REQUEST_ID: u16 = 12;
+const RESPONSE_ID: u32 = 16;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -22,7 +33,17 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let runtime = Runtime::new(1024);
+
     runtime.set_affinity(0);
+    let uring_reactor = IoUringReactor::builder()
+        .queue_size(2048)
+        .buffer_size(DATA_SIZE)
+        .submit_depth(64)
+        .wait_submit_timeout(Duration::from_millis(10))
+        .wait_complete_timeout(Duration::from_millis(30))
+        .build();
+    runtime.register_reactor("io_uring_reactor", uring_reactor.clone());
+
     let ucx_reactor = UCXReactor::current();
     runtime.register_reactor("ucx_reactor", ucx_reactor.clone());
     if let Some(server_addr) = std::env::args().nth(1) {
@@ -30,7 +51,9 @@ fn main() -> anyhow::Result<()> {
             .clone()
             .run(client(server_addr, runtime, ucx_reactor));
     } else {
-        runtime.clone().run(server(runtime, ucx_reactor));
+        runtime
+            .clone()
+            .run(server(runtime, ucx_reactor));
     }
     Ok(())
 }
@@ -56,27 +79,35 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
 
     let endpoint = worker.connect_addr(&worker_addr).unwrap();
 
-
     // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let stream = Rc::new(worker.am_stream(16).unwrap());
     let endpoint = Rc::new(endpoint);
 
-
     tracing::debug!("client: send am message");
     let now = std::time::Instant::now();
 
-    let data = vec![0u8; DATA_SIZE];
-
+    let data = vec![0x6au8; DATA_SIZE];
 
     let mut inflight = 0usize;
-    for _ in 0..N {
+    for i in 0..N {
         while inflight >= WINDOW {
             let _ = stream.wait_msg().await.unwrap(); // 1つ回収
             inflight -= 1;
         }
+
+        let offset = i * DATA_SIZE;
+
+        let header_data = offset.to_le_bytes();
+
         endpoint
-            .am_send(12, &HEADER, &data, true, Some(pluvio_ucx::async_ucx::ucp::AmProto::Rndv))
+            .am_send(
+                12,
+                &header_data,
+                &data,
+                true,
+                Some(pluvio_ucx::async_ucx::ucp::AmProto::Rndv),
+            )
             .await
             .unwrap();
         inflight += 1;
@@ -115,11 +146,36 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
     );
 }
 
-async fn server(runtime: Rc<Runtime>, reactor: Rc<UCXReactor>) -> anyhow::Result<()> {
+async fn server(
+    runtime: Rc<Runtime>,
+    ucx_reactor: Rc<UCXReactor>,
+) -> anyhow::Result<()> {
     tracing::debug!("server");
     let context = pluvio_ucx::Context::new().unwrap();
     let worker = context.create_worker().unwrap();
-    reactor.register_worker(worker.clone());
+    ucx_reactor.register_worker(worker.clone());
+
+    let file = File::options()
+        .create(true)
+        .truncate(true)
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_DIRECT)
+        .open(TARGET_FILE)
+        .expect("Failed to open file");
+    let fd = file.as_raw_fd();
+
+    file.set_len(TOTAL_SIZE as u64)
+        .expect("Failed to set file length");
+
+    register_file(fd);
+
+    let dma_file = std::rc::Rc::new(DmaFile::new(file));
+
+    dma_file
+        .fallocate(TOTAL_SIZE as u64)
+        .await
+        .expect("fallocate failed");
 
     tracing::debug!("server: created worker");
 
@@ -131,49 +187,51 @@ async fn server(runtime: Rc<Runtime>, reactor: Rc<UCXReactor>) -> anyhow::Result
     std::fs::write(SHARED_FILE, worker_addr.as_ref()).unwrap();
     worker.wait_connect();
 
-    let bind = UdpSocket::bind("0.0.0.0:10000").unwrap();
-    tracing::debug!("listening on {}", bind.local_addr().unwrap());
-
-    let stream = worker.am_stream(12).unwrap();
+    let stream = worker.am_stream(REQUEST_ID).unwrap();
     let stream = Rc::new(stream);
 
-    // for i in 0u8.. {
-        // let worker = worker.clone();
-        // let conn = listener.next().await;
-        // conn.remote_addr().unwrap();
-        // let ep = worker.accept(conn).await.unwrap();
-        // let ep = Rc::new(ep);
-        // let epc = ep.clone();
-        let stream = stream.clone();
-        let runtime = runtime.clone();
-        let jh = runtime.clone().spawn(async move {
-            // epをmoveしないとspawn後にdropされてcloseされてしまう
-            // let _ep = epc;
-            // let runtime_clone = runtime.clone();
-            // 事前 spawn しない。受信ループを数本だけ並行稼働させるなら worker プールで。
-            let mut recv_buffer = vec![0u8; DATA_SIZE];
-            for i in 0..(1 << 20) {
-                let mut msg = stream.wait_msg().await.unwrap();
-                if i % 10000 == 0 {
-                    tracing::debug!("server: received {} messages", i);
-                }
-                msg.recv_data_single(&mut recv_buffer).await.unwrap();
-                unsafe {
-                    msg.reply(16, &[0], &[0], false, None).await.unwrap();
-                }
-                // let stream = stream.clone();
-                // runtime_clone.spawn(async move {
-                //     let msg = stream.wait_msg().await.unwrap();
-                //     unsafe {
-                //         msg.reply(16, &[0], &[0], false, None).await.unwrap();
-                //     }
-                // });
-            }
+    let stream = stream.clone();
+    let runtime = runtime.clone();
+    let mut jhs = futures::stream::FuturesUnordered::new();
+    let mut inflight = 0usize;
 
-            tracing::debug!("all done");
-        });
-        jh.await.unwrap();
-    // }
-    // unreachable!()
+    for i in 0..N {
+        let msg = stream.wait_msg().await.unwrap();
+        if i % 10000 == 0 {
+            tracing::debug!("server: received {} messages", i);
+        }
+
+        let header = msg.header();
+        let offset = usize::from_le_bytes(header[0..8].try_into().unwrap());
+
+        let jh = runtime.spawn(write_task(dma_file.clone(), offset, msg));
+        jhs.push(jh);
+        inflight += 1;
+        if inflight >= WINDOW {
+            let _ = jhs.next().await.unwrap().unwrap();
+            inflight -= 1;
+        }
+    }
+
+    tracing::debug!("all done");
+    Ok(())
+}
+
+async fn write_task(
+    file: Rc<DmaFile>,
+    offset: usize,
+    mut msg: AmMsg,
+) -> anyhow::Result<()> {
+    let mut buffer = file.acquire_buffer().await;
+    let buf_ref = buffer.as_mut_slice();
+    msg.recv_data_single(buf_ref).await.unwrap();
+
+    file.write_fixed(buffer, offset as u64).await?;
+
+    unsafe {
+        msg.reply(RESPONSE_ID, &[], &[], false, None)
+            .await
+            .unwrap();
+    }
     Ok(())
 }

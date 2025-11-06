@@ -5,12 +5,11 @@ members = [
     "pluvio_uring",
     "pluvio_ucx", 
     "pluvio_timer",
+    "examples/ucx_example",
+    "examples/uring_example",
+    "examples/remoteio_example"
 ]
 
-exclude = [
-    "examples/uring_example",
-    "examples/ucx_example",
-]
 
 [package]
 name = "pluvio"
