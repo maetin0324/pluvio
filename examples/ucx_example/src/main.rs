@@ -7,6 +7,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static SHARED_FILE: &str = "endpoint_info.data";
+
+const N: usize = 1 << 20;
+const WINDOW: usize = 2048; // まずは 512〜4096 の範囲で要実験
+static DATA_SIZE: usize = 1 << 24;
+static HEADER: [u8; 256] = [0u8; 256];
+static DATA: [u8; DATA_SIZE] = [0u8; DATA_SIZE];
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
@@ -56,14 +63,10 @@ async fn client(server_addr: String, runtime: Rc<Runtime>, reactor: Rc<UCXReacto
     let stream = Rc::new(worker.am_stream(16).unwrap());
     let endpoint = Rc::new(endpoint);
 
-    static HEADER: [u8; 256] = [0u8; 256];
-    static DATA: [u8; 0] = [];
 
     tracing::debug!("client: send am message");
     let now = std::time::Instant::now();
 
-    const N: usize = 1 << 20;
-    const WINDOW: usize = 2048; // まずは 512〜4096 の範囲で要実験
 
     let mut inflight = 0usize;
     for _ in 0..N {
@@ -72,7 +75,7 @@ async fn client(server_addr: String, runtime: Rc<Runtime>, reactor: Rc<UCXReacto
             inflight -= 1;
         }
         endpoint
-            .am_send(12, &HEADER, &DATA, true, None)
+            .am_send(12, &HEADER, &DATA, true, Some(pluvio_ucx::async_ucx::ucp::AmProto::Rndv))
             .await
             .unwrap();
         inflight += 1;
@@ -100,6 +103,14 @@ async fn client(server_addr: String, runtime: Rc<Runtime>, reactor: Rc<UCXReacto
     tracing::info!(
         "IOPS: {}KIOPS",
         (1 << 20) as f64 / now.elapsed().as_secs_f64() / 1024.0
+    );
+    tracing::info!(
+        "Total send size: {}GiB",
+        (DATA_SIZE * (1 << 20)) as f64 / (1 << 30) as f64
+    );
+    tracing::info!(
+        "Bandwidth: {}GB/s",
+        (DATA_SIZE * (1 << 20)) as f64 / now.elapsed().as_secs_f64() / 1e9
     );
 }
 
@@ -139,8 +150,11 @@ async fn server(runtime: Rc<Runtime>, reactor: Rc<UCXReactor>) -> anyhow::Result
             // let _ep = epc;
             // let runtime_clone = runtime.clone();
             // 事前 spawn しない。受信ループを数本だけ並行稼働させるなら worker プールで。
-            for _ in 0..(1 << 20) {
+            for i in 0..(1 << 20) {
                 let msg = stream.wait_msg().await.unwrap();
+                if i % 10000 == 0 {
+                    tracing::debug!("server: received {} messages", i);
+                }
                 unsafe {
                     msg.reply(16, &[0], &[0], false, None).await.unwrap();
                 }
