@@ -187,10 +187,6 @@ impl TimerReactor {
 impl Reactor for TimerReactor {
     fn poll(&self) {
         let timer_count = self.timer_count();
-        tracing::trace!(
-            "TimerReactor: poll() called, {} timers pending",
-            timer_count
-        );
 
         let expired_count = self.wake_expired_timers(Instant::now());
 
@@ -207,11 +203,6 @@ impl Reactor for TimerReactor {
             ReactorStatus::Stopped
         };
 
-        tracing::trace!(
-            "TimerReactor: status() = {:?}, {} timers pending",
-            status,
-            timer_count
-        );
         status
     }
 }
