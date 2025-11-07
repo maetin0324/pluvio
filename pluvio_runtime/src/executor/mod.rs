@@ -280,6 +280,15 @@ impl Runtime {
         self.run_queue();
     }
 
+    pub fn run_with_name<F, T>(&self, future: F, task_name: String)
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        self.spawn_with_name(future, task_name);
+        self.run_queue();
+    }
+
     /// Poll a single task by its id.
     pub fn poll_task(&self, task_id: usize) -> Poll<()> {
         let mut binding = self.task_pool.borrow_mut();
