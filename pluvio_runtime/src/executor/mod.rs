@@ -246,6 +246,7 @@ impl Runtime {
                         "Runtime stuck - no reactor making progress after {} iterations. Breaking out to prevent infinite loop.",
                         stuck_counter
                     );
+                    self.log_running_task_stat();
                     break;
                 }
                 // Log periodically to help debugging
