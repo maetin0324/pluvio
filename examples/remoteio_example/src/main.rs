@@ -49,11 +49,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(server_addr) = std::env::args().nth(1) {
         runtime
             .clone()
-            .run(client(server_addr, runtime, ucx_reactor));
+            .run_with_name("remoteio_client", client(server_addr, runtime, ucx_reactor));
     } else {
         runtime
             .clone()
-            .run(server(runtime, ucx_reactor));
+            .run_with_name("remoteio_server", server(runtime, ucx_reactor));
     }
     Ok(())
 }
@@ -146,10 +146,7 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
     );
 }
 
-async fn server(
-    runtime: Rc<Runtime>,
-    ucx_reactor: Rc<UCXReactor>,
-) -> anyhow::Result<()> {
+async fn server(runtime: Rc<Runtime>, ucx_reactor: Rc<UCXReactor>) -> anyhow::Result<()> {
     tracing::debug!("server");
     let context = pluvio_ucx::Context::new().unwrap();
     let worker = context.create_worker().unwrap();
@@ -204,7 +201,10 @@ async fn server(
         let header = msg.header();
         let offset = usize::from_le_bytes(header[0..8].try_into().unwrap());
 
-        let jh = runtime.spawn_with_name(write_task(dma_file.clone(), offset, msg),format!("write_task_{}", i));
+        let jh = runtime.spawn_with_name(
+            write_task(dma_file.clone(), offset, msg),
+            format!("write_task_{}", i),
+        );
         jhs.push(jh);
         inflight += 1;
         if inflight >= WINDOW {
@@ -220,11 +220,7 @@ async fn server(
     Ok(())
 }
 
-async fn write_task(
-    file: Rc<DmaFile>,
-    offset: usize,
-    mut msg: AmMsg,
-) -> anyhow::Result<()> {
+async fn write_task(file: Rc<DmaFile>, offset: usize, mut msg: AmMsg) -> anyhow::Result<()> {
     let mut buffer = file.acquire_buffer().await;
     let buf_ref = buffer.as_mut_slice();
     msg.recv_data_single(buf_ref).await.unwrap();
@@ -232,9 +228,7 @@ async fn write_task(
     file.write_fixed(buffer, offset as u64).await?;
 
     unsafe {
-        msg.reply(RESPONSE_ID, &[], &[], false, None)
-            .await
-            .unwrap();
+        msg.reply(RESPONSE_ID, &[], &[], false, None).await.unwrap();
     }
     Ok(())
 }

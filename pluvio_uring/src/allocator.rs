@@ -5,7 +5,7 @@
 
 use aligned_box::AlignedBox;
 use std::{
-    alloc::{alloc_zeroed, handle_alloc_error, Layout},
+    alloc::{Layout, alloc_zeroed, handle_alloc_error},
     cell::RefCell,
     collections::VecDeque,
     future::Future,

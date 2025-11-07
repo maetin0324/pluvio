@@ -26,11 +26,14 @@ fn main() -> anyhow::Result<()> {
     let ucx_reactor = UCXReactor::current();
     runtime.register_reactor("ucx_reactor", ucx_reactor.clone());
     if let Some(server_addr) = std::env::args().nth(1) {
+        runtime.clone().run_with_name(
+            "ucx_example_client",
+            client(server_addr, runtime, ucx_reactor),
+        );
+    } else {
         runtime
             .clone()
-            .run(client(server_addr, runtime, ucx_reactor));
-    } else {
-        runtime.clone().run(server(runtime, ucx_reactor));
+            .run_with_name("ucx_example_server", server(runtime, ucx_reactor));
     }
     Ok(())
 }
@@ -56,18 +59,15 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
 
     let endpoint = worker.connect_addr(&worker_addr).unwrap();
 
-
     // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let stream = Rc::new(worker.am_stream(16).unwrap());
     let endpoint = Rc::new(endpoint);
 
-
     tracing::debug!("client: send am message");
     let now = std::time::Instant::now();
 
     let data = vec![0u8; DATA_SIZE];
-
 
     let mut inflight = 0usize;
     for _ in 0..N {
@@ -76,7 +76,13 @@ async fn client(server_addr: String, _runtime: Rc<Runtime>, reactor: Rc<UCXReact
             inflight -= 1;
         }
         endpoint
-            .am_send(12, &HEADER, &data, true, Some(pluvio_ucx::async_ucx::ucp::AmProto::Rndv))
+            .am_send(
+                12,
+                &HEADER,
+                &data,
+                true,
+                Some(pluvio_ucx::async_ucx::ucp::AmProto::Rndv),
+            )
             .await
             .unwrap();
         inflight += 1;
@@ -138,41 +144,41 @@ async fn server(runtime: Rc<Runtime>, reactor: Rc<UCXReactor>) -> anyhow::Result
     let stream = Rc::new(stream);
 
     // for i in 0u8.. {
-        // let worker = worker.clone();
-        // let conn = listener.next().await;
-        // conn.remote_addr().unwrap();
-        // let ep = worker.accept(conn).await.unwrap();
-        // let ep = Rc::new(ep);
-        // let epc = ep.clone();
-        let stream = stream.clone();
-        let runtime = runtime.clone();
-        let jh = runtime.clone().spawn(async move {
-            // epをmoveしないとspawn後にdropされてcloseされてしまう
-            // let _ep = epc;
-            // let runtime_clone = runtime.clone();
-            // 事前 spawn しない。受信ループを数本だけ並行稼働させるなら worker プールで。
-            let mut recv_buffer = vec![0u8; DATA_SIZE];
-            for i in 0..(1 << 20) {
-                let mut msg = stream.wait_msg().await.unwrap();
-                if i % 10000 == 0 {
-                    tracing::debug!("server: received {} messages", i);
-                }
-                msg.recv_data_single(&mut recv_buffer).await.unwrap();
-                unsafe {
-                    msg.reply(16, &[0], &[0], false, None).await.unwrap();
-                }
-                // let stream = stream.clone();
-                // runtime_clone.spawn(async move {
-                //     let msg = stream.wait_msg().await.unwrap();
-                //     unsafe {
-                //         msg.reply(16, &[0], &[0], false, None).await.unwrap();
-                //     }
-                // });
+    // let worker = worker.clone();
+    // let conn = listener.next().await;
+    // conn.remote_addr().unwrap();
+    // let ep = worker.accept(conn).await.unwrap();
+    // let ep = Rc::new(ep);
+    // let epc = ep.clone();
+    let stream = stream.clone();
+    let runtime = runtime.clone();
+    let jh = runtime.clone().spawn(async move {
+        // epをmoveしないとspawn後にdropされてcloseされてしまう
+        // let _ep = epc;
+        // let runtime_clone = runtime.clone();
+        // 事前 spawn しない。受信ループを数本だけ並行稼働させるなら worker プールで。
+        let mut recv_buffer = vec![0u8; DATA_SIZE];
+        for i in 0..(1 << 20) {
+            let mut msg = stream.wait_msg().await.unwrap();
+            if i % 10000 == 0 {
+                tracing::debug!("server: received {} messages", i);
             }
+            msg.recv_data_single(&mut recv_buffer).await.unwrap();
+            unsafe {
+                msg.reply(16, &[0], &[0], false, None).await.unwrap();
+            }
+            // let stream = stream.clone();
+            // runtime_clone.spawn(async move {
+            //     let msg = stream.wait_msg().await.unwrap();
+            //     unsafe {
+            //         msg.reply(16, &[0], &[0], false, None).await.unwrap();
+            //     }
+            // });
+        }
 
-            tracing::debug!("all done");
-        });
-        jh.await.unwrap();
+        tracing::debug!("all done");
+    });
+    jh.await.unwrap();
     // }
     // unreachable!()
     Ok(())

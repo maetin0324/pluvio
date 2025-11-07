@@ -276,16 +276,17 @@ impl Runtime {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        self.spawn(future);
-        self.run_queue();
+        self.run_with_name("unnamed_run", future);
     }
 
-    pub fn run_with_name<F, T>(&self, future: F, task_name: String)
+    /// Run the provided future with an explicit task name for easier tracing.
+    pub fn run_with_name<F, T, S>(&self, task_name: S, future: F)
     where
         F: Future<Output = T> + 'static,
         T: 'static,
+        S: Into<String>,
     {
-        self.spawn_with_name(future, task_name);
+        self.spawn_with_name(future, task_name.into());
         self.run_queue();
     }
 
@@ -401,7 +402,7 @@ mod tests {
         runtime.spawn(async {});
 
         let start = Instant::now();
-        runtime.run(async {});
+        runtime.run_with_name("run_stops_after_simple_spawned_task", async {});
 
         let elapsed = start.elapsed();
         assert!(
