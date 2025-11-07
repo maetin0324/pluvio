@@ -46,6 +46,11 @@ pub struct Runtime {
     stat: RuntimeStat,
 }
 
+// Thread-local storage for the runtime
+thread_local! {
+    static RUNTIME: RefCell<Option<Rc<Runtime>>> = RefCell::new(None);
+}
+
 impl Runtime {
     /// Creates a new runtime with an internal task queue of `queue_size`.
     pub fn new(queue_size: u64) -> Rc<Self> {
@@ -77,8 +82,8 @@ impl Runtime {
     }
 
     /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
-    /// its result.
-    pub fn spawn<F, T>(&self, future: F) -> JoinHandle<T>
+    /// its result. This version explicitly takes a runtime reference.
+    pub fn spawn_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
@@ -97,7 +102,8 @@ impl Runtime {
     }
 
     /// Spawn a task that will be polled in a dedicated polling queue.
-    pub fn spawn_polling<F, T>(&self, future: F) -> JoinHandle<T>
+    /// This version explicitly takes a runtime reference.
+    pub fn spawn_polling_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
@@ -119,7 +125,8 @@ impl Runtime {
     }
 
     /// Spawn a task and associate a name with it for statistics.
-    pub fn spawn_with_name<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
+    /// This version explicitly takes a runtime reference.
+    pub fn spawn_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
@@ -139,8 +146,8 @@ impl Runtime {
     }
 
     /// Spawn a task to the polling queue with a specific name for
-    /// statistics purposes.
-    pub fn spawn_polling_with_name<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
+    /// statistics purposes. This version explicitly takes a runtime reference.
+    pub fn spawn_polling_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
@@ -271,22 +278,24 @@ impl Runtime {
     }
 
     /// Run the provided future to completion, driving the event loop.
-    pub fn run<F, T>(&self, future: F)
+    /// This version explicitly takes a runtime reference.
+    pub fn run_with_runtime<F, T>(&self, future: F)
     where
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        self.run_with_name("unnamed_run", future);
+        self.run_with_name_and_runtime("unnamed_run", future);
     }
 
     /// Run the provided future with an explicit task name for easier tracing.
-    pub fn run_with_name<F, T, S>(&self, task_name: S, future: F)
+    /// This version explicitly takes a runtime reference.
+    pub fn run_with_name_and_runtime<F, T, S>(&self, task_name: S, future: F)
     where
         F: Future<Output = T> + 'static,
         T: 'static,
         S: Into<String>,
     {
-        self.spawn_with_name(future, task_name.into());
+        self.spawn_with_name_and_runtime(future, task_name.into());
         self.run_queue();
     }
 
@@ -391,18 +400,130 @@ impl Runtime {
     // }
 }
 
+// TLS-based convenience functions
+
+/// Set the thread-local runtime that will be used by TLS-based APIs.
+pub fn set_runtime(runtime: Rc<Runtime>) {
+    RUNTIME.with(|r| {
+        *r.borrow_mut() = Some(runtime);
+    });
+}
+
+/// Get a clone of the thread-local runtime.
+pub fn get_runtime() -> Option<Rc<Runtime>> {
+    RUNTIME.with(|r| r.borrow().clone())
+}
+
+/// Clear the thread-local runtime.
+pub fn clear_runtime() {
+    RUNTIME.with(|r| {
+        *r.borrow_mut() = None;
+    });
+}
+
+/// Spawn a future onto the thread-local runtime and return a [`JoinHandle`].
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn spawn<F, T>(future: F) -> JoinHandle<T>
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .spawn_with_runtime(future)
+}
+
+/// Spawn a task that will be polled in a dedicated polling queue.
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn spawn_polling<F, T>(future: F) -> JoinHandle<T>
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .spawn_polling_with_runtime(future)
+}
+
+/// Spawn a task with a name for statistics.
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn spawn_with_name<F, T>(future: F, task_name: String) -> JoinHandle<T>
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .spawn_with_name_and_runtime(future, task_name)
+}
+
+/// Spawn a task to the polling queue with a specific name.
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn spawn_polling_with_name<F, T>(future: F, task_name: String) -> JoinHandle<T>
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .spawn_polling_with_name_and_runtime(future, task_name)
+}
+
+/// Run the provided future to completion on the thread-local runtime.
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn run<F, T>(future: F)
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .run_with_runtime(future)
+}
+
+/// Run the provided future with an explicit task name on the thread-local runtime.
+///
+/// # Panics
+///
+/// Panics if no runtime has been set via [`set_runtime`].
+pub fn run_with_name<F, T, S>(task_name: S, future: F)
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+    S: Into<String>,
+{
+    get_runtime()
+        .expect("No runtime set in thread-local storage. Call set_runtime first.")
+        .run_with_name_and_runtime(task_name, future)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Runtime;
+    use super::*;
     use std::time::{Duration, Instant};
 
     #[test]
     fn run_stops_after_simple_spawned_task() {
         let runtime = Runtime::new(4);
-        runtime.spawn(async {});
+        runtime.spawn_with_runtime(async {});
 
         let start = Instant::now();
-        runtime.run_with_name("run_stops_after_simple_spawned_task", async {});
+        runtime.run_with_name_and_runtime("run_stops_after_simple_spawned_task", async {});
 
         let elapsed = start.elapsed();
         assert!(
@@ -410,5 +531,33 @@ mod tests {
             "Runtime::run took {:?} which exceeds the 500ms budget",
             elapsed
         );
+    }
+
+    #[test]
+    fn tls_spawn_and_run() {
+        let runtime = Runtime::new(4);
+        set_runtime(runtime.clone());
+
+        spawn(async {
+            // Simple task
+        });
+
+        let start = Instant::now();
+        run_with_name("tls_spawn_and_run", async {});
+
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "TLS-based run took {:?} which exceeds the 500ms budget",
+            elapsed
+        );
+
+        clear_runtime();
+    }
+
+    #[test]
+    #[should_panic(expected = "No runtime set in thread-local storage")]
+    fn tls_spawn_without_runtime_panics() {
+        spawn(async {});
     }
 }
