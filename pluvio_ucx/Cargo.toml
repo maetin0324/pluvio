@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-ucx = { git = "https://github.com/maetin0324/async-ucx.git", branch = "main", features = ["am"] }
+async-ucx = { path = "lib/async-ucx", features = ["am"] }
 pluvio_runtime = { path = "../pluvio_runtime" }
 slab = "0.4.10"
 tracing = {workspace = true}

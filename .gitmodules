@@ -1,0 +1,3 @@
+[submodule "pluvio_ucx/lib/async-ucx"]
+	path = pluvio_ucx/lib/async-ucx
+	url = https://github.com/maetin0324/async-ucx.git
