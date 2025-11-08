@@ -186,8 +186,6 @@ impl TimerReactor {
 
 impl Reactor for TimerReactor {
     fn poll(&self) {
-        let timer_count = self.timer_count();
-
         let expired_count = self.wake_expired_timers(Instant::now());
 
         if expired_count > 0 {
