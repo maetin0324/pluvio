@@ -8,7 +8,7 @@ pub mod spsc;
 pub mod stat;
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
     future::Future,
     rc::Rc,
@@ -48,8 +48,9 @@ pub struct Runtime {
 
 // Thread-local storage for the runtime
 thread_local! {
-    static RUNTIME: RefCell<Option<Rc<Runtime>>> = RefCell::new(None);
+    pub static RUNTIME: OnceCell<Rc<Runtime>> = OnceCell::new();
 }
+
 
 impl Runtime {
     /// Creates a new runtime with an internal task queue of `queue_size`.
@@ -405,21 +406,22 @@ impl Runtime {
 /// Set the thread-local runtime that will be used by TLS-based APIs.
 pub fn set_runtime(runtime: Rc<Runtime>) {
     RUNTIME.with(|r| {
-        *r.borrow_mut() = Some(runtime);
+        r.set(runtime).unwrap_or_else(|_| panic!("Failed to set runtime"));
     });
 }
 
 /// Get a clone of the thread-local runtime.
 pub fn get_runtime() -> Option<Rc<Runtime>> {
-    RUNTIME.with(|r| r.borrow().clone())
+    RUNTIME.with(|r| r.get().cloned())
 }
 
-/// Clear the thread-local runtime.
+/// Clear the thread-local runtime. 
 pub fn clear_runtime() {
-    RUNTIME.with(|r| {
-        *r.borrow_mut() = None;
-    });
+    // RUNTIME.with(|r| {
+    //     r.clear();
+    // });
 }
+
 
 /// Spawn a future onto the thread-local runtime and return a [`JoinHandle`].
 ///
