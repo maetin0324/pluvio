@@ -10,6 +10,10 @@ members = [
     "examples/remoteio_example"
 ]
 
+exclude = [
+    "examples/mpi_example"
+]
+
 
 [package]
 name = "pluvio"
