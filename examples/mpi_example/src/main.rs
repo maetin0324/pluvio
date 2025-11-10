@@ -351,10 +351,16 @@ async fn run_client(
 
     println!("Rank {}: Read socket address: {}", mpi_rank, server_socket_str.trim());
 
-    let server_socket: std::net::SocketAddr = server_socket_str.trim().parse()
-        .map_err(|e| format!("Failed to parse server socket '{}': {}", server_socket_str, e))?;
+    // Use to_socket_addrs to resolve hostname to IP address
+    use std::net::ToSocketAddrs;
+    let mut addrs = server_socket_str.trim()
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve server socket '{}': {}", server_socket_str.trim(), e))?;
 
-    println!("Rank {}: Connecting to server at {}", mpi_rank, server_socket);
+    let server_socket = addrs.next()
+        .ok_or_else(|| format!("No addresses resolved for '{}'", server_socket_str.trim()))?;
+
+    println!("Rank {}: Resolved to {} - connecting to server...", mpi_rank, server_socket);
     let endpoint = worker.connect_socket(server_socket).await?;
     println!("Rank {}: Socket connection established to server rank {}",
              mpi_rank, server_rank);
