@@ -13,3 +13,4 @@ futures = "0.3"
 futures-timer = "3.0"
 tracing = "0.1.41"
 tracing-subscriber = {version = "0.3.20", features = ["env-filter"]}
+libc = "0.2"
