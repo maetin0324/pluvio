@@ -329,19 +329,28 @@ async fn run_client(
 
     // Wait for server socket file
     let server_socket_file = registry_dir.join(format!("server_{}.socket", server_index));
+    println!("Rank {}: Waiting for socket file: {:?}", mpi_rank, server_socket_file);
+
     let mut retries = 0;
     while !server_socket_file.exists() && retries < 60 {
-        futures_timer::Delay::new(Duration::from_millis(100)).await;
+        // Use std::thread::sleep instead of futures_timer for compatibility with pluvio runtime
+        std::thread::sleep(Duration::from_millis(100));
         retries += 1;
     }
 
     if !server_socket_file.exists() {
-        return Err(format!("Rank {}: Server socket file not found: {:?}",
-                          mpi_rank, server_socket_file).into());
+        return Err(format!("Rank {}: Server socket file not found after {} retries: {:?}",
+                          mpi_rank, retries, server_socket_file).into());
     }
 
+    println!("Rank {}: Found socket file after {} retries", mpi_rank, retries);
+
     // Read server socket address
-    let server_socket_str = std::fs::read_to_string(&server_socket_file)?;
+    let server_socket_str = std::fs::read_to_string(&server_socket_file)
+        .map_err(|e| format!("Failed to read socket file: {}", e))?;
+
+    println!("Rank {}: Read socket address: {}", mpi_rank, server_socket_str.trim());
+
     let server_socket: std::net::SocketAddr = server_socket_str.trim().parse()
         .map_err(|e| format!("Failed to parse server socket '{}': {}", server_socket_str, e))?;
 
