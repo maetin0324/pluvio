@@ -1,1 +1,4 @@
 /target
+/results
+mpi-example-job.sh.e*
+mpi-example-job.sh.o*
