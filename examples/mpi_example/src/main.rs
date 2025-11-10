@@ -2,11 +2,12 @@
 // This example tests if MPI and UCX can coexist without context conflicts
 
 use pluvio_runtime::executor::Runtime;
-use pluvio_ucx::{UCXReactor, WorkerAddressInner};
+use pluvio_ucx::UCXReactor;
 use std::rc::Rc;
 use mpi::traits::*;
 use std::time::Duration;
 use std::path::PathBuf;
+use std::mem::MaybeUninit;
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -83,7 +84,7 @@ fn main() {
 }
 
 fn test_ucx_with_mpi(
-    runtime: Rc<Runtime>,
+    _runtime: Rc<Runtime>,
     reactor: Rc<UCXReactor>,
     mpi_rank: i32,
     mpi_size: i32,
@@ -96,8 +97,11 @@ fn test_ucx_with_mpi(
 
     println!("Rank {}: UCX worker created successfully", mpi_rank);
 
+    // Clone registry_dir to move into async block
+    let registry_dir = registry_dir.clone();
+
     // Test Socket connection mode
-    runtime.clone().run_with_name("mpi_ucx_test", async move {
+    pluvio_runtime::run_with_name("mpi_ucx_test", async move {
         // Rank 0 acts as server, others as clients
         if mpi_rank == 0 {
             // Server: Create listener and accept connections
@@ -105,7 +109,7 @@ fn test_ucx_with_mpi(
 
             // Create listener on Socket address
             let bind_addr = "0.0.0.0:20000".parse().unwrap();
-            let listener = worker.create_listener(bind_addr)?;
+            let mut listener = worker.create_listener(bind_addr)?;
             println!("Rank 0: Listener created on {:?}", listener.socket_addr()?);
 
             // Also get and save WorkerAddress for testing
@@ -125,7 +129,7 @@ fn test_ucx_with_mpi(
                 let test_data = b"Hello from rank 0";
                 endpoint.stream_send(test_data).await?;
 
-                let mut recv_buf = vec![0u8; 32];
+                let mut recv_buf: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); 32];
                 let received = endpoint.stream_recv(&mut recv_buf).await?;
                 println!("Rank 0: Received {} bytes from rank {}", received, i);
             }
@@ -158,7 +162,7 @@ fn test_ucx_with_mpi(
             println!("Rank {}: Socket connection established", mpi_rank);
 
             // Test data exchange
-            let mut recv_buf = vec![0u8; 32];
+            let mut recv_buf: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); 32];
             let received = endpoint.stream_recv(&mut recv_buf).await?;
             println!("Rank {}: Received {} bytes", mpi_rank, received);
 
@@ -174,7 +178,7 @@ fn test_ucx_with_mpi(
 
         println!("Rank {}: Test completed", mpi_rank);
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    })?;
+    });
 
     Ok(())
 }
