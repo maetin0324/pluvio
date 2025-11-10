@@ -5,7 +5,7 @@ source "${SCRIPT_DIR}/common.sh"
 TIMESTAMP="$(timestamp)"
 
 # default params
-: ${ELAPSTIM_REQ:="0:10:00"}
+: ${ELAPSTIM_REQ:="0:05:00"}
 : ${LABEL:=default}
 
 JOB_FILE="$(remove_ext "$(this_file)")-job.sh"
