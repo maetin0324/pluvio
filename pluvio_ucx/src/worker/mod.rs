@@ -51,6 +51,10 @@ impl Context {
         Ok(Worker::new(worker))
     }
 
+    pub fn inner(&self) -> &Arc<async_ucx::ucp::Context> {
+        &self.context
+    }
+
     pub fn print_to_stderr(&self) {
         self.context.print_to_stderr();
     }
