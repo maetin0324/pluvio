@@ -172,11 +172,26 @@ async fn run_server(
     let mut listener = worker.create_listener(bind_addr)?;
     println!("Rank {}: Listener created on {:?}", mpi_rank, listener.socket_addr()?);
 
+    // Get hostname for cross-node connections
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_else(|| "localhost".to_string())
+        .trim()
+        .to_string();
+
+    // Save socket address (hostname:port) for client connection
+    let socket_info = format!("{}:{}", hostname, port);
+    let socket_file = registry_dir.join(format!("server_{}.socket", server_index));
+    std::fs::write(&socket_file, &socket_info)?;
+    println!("Rank {}: Socket info saved to {:?}: {}", mpi_rank, socket_file, socket_info);
+
     // Save WorkerAddress for debugging
     let worker_addr = worker.address()?;
     let addr_file = registry_dir.join(format!("server_{}.addr", server_index));
     std::fs::write(&addr_file, worker_addr.as_ref())?;
-    println!("Rank {}: WorkerAddress saved to {:?}", mpi_rank, addr_file);
+    println!("Rank {}: WorkerAddress saved to {:?} ({} bytes)", mpi_rank, addr_file, worker_addr.as_ref().len());
 
     // Create DMA file for I/O
     let target_file = registry_dir.join(format!("mpi_test_rank_{}.data", mpi_rank));
@@ -309,26 +324,28 @@ async fn run_client(
     // Determine which server to connect to
     let server_index = (mpi_rank - 1) / 2;
     let server_rank = server_index * 2;
-    let server_port = 20000 + server_index as u16;
 
-    println!("Rank {}: Connecting to server rank {} (port {})",
-             mpi_rank, server_rank, server_port);
+    println!("Rank {}: Connecting to server rank {}", mpi_rank, server_rank);
 
-    // Wait for server address file
-    let server_addr_file = registry_dir.join(format!("server_{}.addr", server_index));
+    // Wait for server socket file
+    let server_socket_file = registry_dir.join(format!("server_{}.socket", server_index));
     let mut retries = 0;
-    while !server_addr_file.exists() && retries < 60 {
+    while !server_socket_file.exists() && retries < 60 {
         futures_timer::Delay::new(Duration::from_millis(100)).await;
         retries += 1;
     }
 
-    if !server_addr_file.exists() {
-        return Err(format!("Rank {}: Server address file not found: {:?}",
-                          mpi_rank, server_addr_file).into());
+    if !server_socket_file.exists() {
+        return Err(format!("Rank {}: Server socket file not found: {:?}",
+                          mpi_rank, server_socket_file).into());
     }
 
-    // Connect via Socket
-    let server_socket = format!("127.0.0.1:{}", server_port).parse().unwrap();
+    // Read server socket address
+    let server_socket_str = std::fs::read_to_string(&server_socket_file)?;
+    let server_socket: std::net::SocketAddr = server_socket_str.trim().parse()
+        .map_err(|e| format!("Failed to parse server socket '{}': {}", server_socket_str, e))?;
+
+    println!("Rank {}: Connecting to server at {}", mpi_rank, server_socket);
     let endpoint = worker.connect_socket(server_socket).await?;
     println!("Rank {}: Socket connection established to server rank {}",
              mpi_rank, server_rank);
