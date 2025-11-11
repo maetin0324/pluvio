@@ -224,6 +224,22 @@ impl FixedBuffer {
     }
 }
 
+impl AsRef<[u8]> for FixedBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.buffer
+            .as_ref()
+            .map_or(&[], |buf| buf.as_slice())
+    }
+}
+
+impl AsMut<[u8]> for FixedBuffer {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.buffer
+            .as_mut()
+            .map_or(&mut [], |buf| buf.as_mut_slice())
+    }
+}
+
 impl Drop for FixedBuffer {
     fn drop(&mut self) {
         // On drop, the buffer is marked as free.
