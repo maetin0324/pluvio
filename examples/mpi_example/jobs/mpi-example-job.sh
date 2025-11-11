@@ -136,9 +136,9 @@ echo ""
 
 cmd_mpi_example=(
   "${cmd_mpirun[@]}"
-  -np "${NNODES}"
-  --bind-to none
-  -map-by ppr:1:node
+  # -np "${NNODES}"
+  --bind-to core
+  # -map-by ppr:2:node
   -x RUST_LOG
   -x RUST_BACKTRACE
   "${MPI_EXAMPLE_PREFIX}/mpi_example"
