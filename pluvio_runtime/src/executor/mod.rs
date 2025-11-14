@@ -314,6 +314,54 @@ impl Runtime {
         ret
     }
 
+    /// Progress the runtime by polling reactors and processing a limited number of tasks.
+    /// This is useful for incremental runtime progress in a loop without blocking.
+    pub fn progress(&self) {
+        // Poll all enabled reactors to drive I/O progress
+        for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
+            if reactor_wrapper.enable.get() {
+                if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+                    reactor_wrapper.reactor.poll();
+                    reactor_wrapper
+                        .poll_counter
+                        .set(reactor_wrapper.poll_counter.get() + 1);
+                }
+            }
+        }
+
+        // Process all currently available tasks from the polling queue
+        let mut polling_tasks = Vec::new();
+        while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+            polling_tasks.push(task_id);
+        }
+        for task_id in polling_tasks {
+            if let Poll::Ready(_) = self.poll_task(task_id) {
+                let mut binding = self.task_pool.borrow_mut();
+                let task = binding.get_mut(task_id);
+                self.stat.add_task_stat(task);
+                binding.remove(task_id);
+            }
+        }
+
+        // Process all currently available tasks from the regular queue
+        // Limit to prevent infinite loop if tasks keep spawning new tasks
+        let max_tasks_per_call = 100;
+        let mut processed = 0;
+        while processed < max_tasks_per_call {
+            if let Ok(task_id) = self.task_receiver.try_recv() {
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    let mut binding = self.task_pool.borrow_mut();
+                    let task = binding.get_mut(task_id);
+                    self.stat.add_task_stat(task);
+                    binding.remove(task_id);
+                }
+                processed += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
     pub fn log_running_task_stat(&self) {
         let binding = self.task_pool.borrow();
         let running_task_stats = binding
