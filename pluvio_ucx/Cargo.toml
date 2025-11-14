@@ -3,6 +3,10 @@ name = "pluvio_ucx"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+am = []  # Enable Active Message support (already enabled in async-ucx by default)
+
 [dependencies]
 async-ucx = { path = "lib/async-ucx", features = ["am"] }
 pluvio_runtime = { path = "../pluvio_runtime" }
