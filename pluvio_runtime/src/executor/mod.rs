@@ -278,6 +278,157 @@ impl Runtime {
         }
     }
 
+    /// Block on a specific future until it completes, without waiting for other tasks.
+    ///
+    /// This spawns the future as a task and runs the event loop until that specific
+    /// task completes. Other background tasks continue running but don't block this call.
+    ///
+    /// # Arguments
+    ///
+    /// * `future` - The async function to execute
+    ///
+    /// # Returns
+    ///
+    /// The output of the future once it completes
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let result = runtime.block_on_with_runtime(async {
+    ///     some_async_operation().await
+    /// });
+    /// ```
+    pub fn block_on_with_runtime<F, T>(&self, future: F) -> T
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        self.block_on_with_name_and_runtime("unnamed_block_on", future)
+    }
+
+    /// Block on a specific future with a name until it completes.
+    ///
+    /// This is similar to `block_on_with_runtime` but includes a task name for debugging.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_name` - Name for the task (for logging/debugging)
+    /// * `future` - The async function to execute
+    ///
+    /// # Returns
+    ///
+    /// The output of the future once it completes
+    pub fn block_on_with_name_and_runtime<F, T, S>(&self, task_name: S, future: F) -> T
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+        S: Into<String>,
+    {
+        // Wrap the future to capture its result
+        let result_holder = Rc::new(RefCell::new(None));
+        let result_holder_clone = result_holder.clone();
+
+        let wrapped_future = async move {
+            let result = future.await;
+            *result_holder_clone.borrow_mut() = Some(result);
+        };
+
+        // Spawn the task and get its task_id
+        let (task, _handle) = Task::create_task_and_handle(
+            wrapped_future,
+            self.task_sender.clone(),
+            Some(task_name.into()),
+        );
+
+        let mut task_pool = self.task_pool.borrow_mut();
+        let target_task_id = task_pool.insert(task);
+        drop(task_pool);
+
+        // Send the task to the queue
+        self.task_sender
+            .send(target_task_id)
+            .expect("Failed to send task");
+
+        // Run the event loop until OUR specific task completes
+        let mut stuck_counter: u64 = 0;
+        let max_stuck_iterations = std::env::var("PLUVIO_MAX_STUCK_ITERATIONS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1000000);
+
+        loop {
+            // Check if our target task has completed
+            {
+                let task_pool = self.task_pool.borrow();
+                if !task_pool.contains(target_task_id) {
+                    // Task completed and was removed from pool
+                    break;
+                }
+            }
+
+            let mut made_progress = false;
+
+            // Poll reactors to drive I/O
+            for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
+                if reactor_wrapper.enable.get() {
+                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+                        reactor_wrapper.reactor.poll();
+                        reactor_wrapper
+                            .poll_counter
+                            .set(reactor_wrapper.poll_counter.get() + 1);
+                        made_progress = true;
+                    }
+                }
+            }
+
+            // Process polling queue tasks
+            let mut polling_tasks = Vec::new();
+            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                polling_tasks.push(task_id);
+            }
+            for task_id in polling_tasks {
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    let mut binding = self.task_pool.borrow_mut();
+                    let task = binding.get_mut(task_id);
+                    self.stat.add_task_stat(task);
+                    binding.remove(task_id);
+                    made_progress = true;
+                }
+            }
+
+            // Process regular queue tasks
+            if let Ok(task_id) = self.task_receiver.try_recv() {
+                if let Poll::Ready(_) = self.poll_task(task_id) {
+                    let mut binding = self.task_pool.borrow_mut();
+                    let task = binding.get_mut(task_id);
+                    self.stat.add_task_stat(task);
+                    binding.remove(task_id);
+                    made_progress = true;
+                }
+            }
+
+            // Check for stuck condition
+            if !made_progress {
+                stuck_counter += 1;
+                if stuck_counter > max_stuck_iterations {
+                    tracing::error!(
+                        "block_on stuck - no progress after {} iterations",
+                        stuck_counter
+                    );
+                    panic!("block_on deadlock detected");
+                }
+                // Small yield to avoid busy loop
+                std::thread::yield_now();
+            } else {
+                stuck_counter = 0;
+            }
+        }
+
+        // Extract and return the result
+        let result = result_holder.borrow_mut().take();
+        result.expect("Task completed but result was not set")
+    }
+
     /// Run the provided future to completion, driving the event loop.
     /// This version explicitly takes a runtime reference.
     pub fn run_with_runtime<F, T>(&self, future: F)
@@ -290,6 +441,9 @@ impl Runtime {
 
     /// Run the provided future with an explicit task name for easier tracing.
     /// This version explicitly takes a runtime reference.
+    ///
+    /// NOTE: This runs ALL tasks in the queue until completion. For blocking on
+    /// a single task without waiting for background tasks, use `block_on_with_runtime`.
     pub fn run_with_name_and_runtime<F, T, S>(&self, task_name: S, future: F)
     where
         F: Future<Output = T> + 'static,
