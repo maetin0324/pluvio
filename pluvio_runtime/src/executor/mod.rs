@@ -415,6 +415,7 @@ impl Runtime {
                         "block_on stuck - no progress after {} iterations",
                         stuck_counter
                     );
+                    self.log_running_task_stat();
                     panic!("block_on deadlock detected");
                 }
                 // Small yield to avoid busy loop
