@@ -460,6 +460,15 @@ impl Runtime {
         let mut binding = self.task_pool.borrow_mut();
         let task_slot = binding.get_mut(task_id).expect("Task not found");
         let task = task_slot.take().expect("Task not found");
+
+        // Get task name for span
+        let task_name = task.task_stat.as_ref()
+            .and_then(|s| s.task_name.as_deref())
+            .unwrap_or("unnamed");
+
+        // Create span with task information
+        let _span = tracing::trace_span!("poll_task", task_id, task_name).entered();
+
         drop(binding);
         let ret = task.poll_task(task_id);
         // taskを再度task_slotに格納
