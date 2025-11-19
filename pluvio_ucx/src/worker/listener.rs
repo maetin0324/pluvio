@@ -13,6 +13,7 @@ impl Listener {
         self.listener.socket_addr()
     }
 
+    #[async_backtrace::framed]
     pub async fn next(&mut self) -> async_ucx::ucp::ConnectionRequest {
         self.listener.next().await
     }

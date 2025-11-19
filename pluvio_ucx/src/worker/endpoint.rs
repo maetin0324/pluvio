@@ -7,6 +7,7 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    #[async_backtrace::framed]
     pub async fn put(
         &self,
         buf: &[u8],
@@ -19,6 +20,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn get(
         &self,
         buf: &mut [u8],
@@ -31,6 +33,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn stream_send(&self, buf: &[u8]) -> Result<usize, async_ucx::Error> {
         self.worker.activate();
         let ret = self.endpoint.stream_send(buf).await;
@@ -38,6 +41,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn stream_recv(
         &self,
         buf: &mut [MaybeUninit<u8>],
@@ -48,6 +52,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn tag_send(&self, tag: u64, buf: &[u8]) -> Result<usize, async_ucx::Error> {
         self.worker.activate();
         let ret = self.endpoint.tag_send(tag, buf).await;
@@ -55,6 +60,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn tag_send_vectored(
         &self,
         tag: u64,
@@ -78,10 +84,12 @@ impl Endpoint {
         self.endpoint.print_to_stderr();
     }
 
+    #[async_backtrace::framed]
     pub async fn flush(&self) -> Result<(), async_ucx::Error> {
         self.endpoint.flush().await
     }
 
+    #[async_backtrace::framed]
     pub async fn close(&self, force: bool) -> Result<(), async_ucx::Error> {
         self.endpoint.close(force).await
     }

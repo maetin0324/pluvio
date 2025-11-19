@@ -151,6 +151,7 @@ impl Worker {
         }
     }
 
+    #[async_backtrace::framed]
     pub async fn connect_socket(
         self: &Rc<Self>,
         addr: SocketAddr,
@@ -167,6 +168,7 @@ impl Worker {
         }
     }
 
+    #[async_backtrace::framed]
     pub async fn accept(
         self: &Rc<Self>,
         connection: async_ucx::ucp::ConnectionRequest,
@@ -183,6 +185,7 @@ impl Worker {
         }
     }
 
+    #[async_backtrace::framed]
     pub async fn tag_recv(
         &self,
         tag: u64,
@@ -194,6 +197,7 @@ impl Worker {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn tag_recv_mask(
         &self,
         tag: u64,
@@ -206,6 +210,7 @@ impl Worker {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn tag_recv_vectored(
         &self,
         tag: u64,

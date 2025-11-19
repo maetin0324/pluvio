@@ -29,6 +29,7 @@ impl Worker {
 }
 
 impl Endpoint {
+    #[async_backtrace::framed]
     pub async fn am_send(
         &self,
         id: u32,
@@ -47,6 +48,7 @@ impl Endpoint {
         ret
     }
 
+    #[async_backtrace::framed]
     pub async fn am_send_vectorized(
         &self,
         id: u32,
@@ -67,6 +69,7 @@ impl Endpoint {
 }
 
 impl AmStream {
+    #[async_backtrace::framed]
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
         self.worker.wait_connect();
         let ret = self.stream.wait_msg().await;

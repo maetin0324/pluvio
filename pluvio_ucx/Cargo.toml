@@ -12,3 +12,4 @@ async-ucx = { path = "lib/async-ucx", features = ["am"] }
 pluvio_runtime = { path = "../pluvio_runtime" }
 slab = "0.4.10"
 tracing = {workspace = true}
+async-backtrace = "0.2"
