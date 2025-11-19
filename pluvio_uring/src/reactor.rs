@@ -182,6 +182,7 @@ impl IoUringReactor {
     }
 
     /// Acquire a fixed buffer from the internal allocator.
+    #[async_backtrace::framed]
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.allocator.acquire().await
     }

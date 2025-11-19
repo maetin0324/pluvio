@@ -113,6 +113,7 @@ impl FixedBufferAllocator {
 
     /// Acquires an available buffer. Returns a WriteFixedBuffer handle.
     /// Acquire a buffer asynchronously.
+    #[async_backtrace::framed]
     pub async fn acquire(self: &Rc<Self>) -> FixedBuffer {
         LazyAcquire::new(Rc::clone(self)).await
     }

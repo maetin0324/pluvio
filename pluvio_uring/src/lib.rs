@@ -10,6 +10,7 @@ pub mod builder;
 pub mod file;
 pub mod reactor;
 
+#[async_backtrace::framed]
 pub async fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> FixedBuffer {
     allocator.acquire().await
 }

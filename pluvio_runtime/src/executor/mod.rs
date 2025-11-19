@@ -255,6 +255,12 @@ impl Runtime {
                         stuck_counter
                     );
                     self.log_running_task_stat();
+
+                    // Dump async backtrace to help debugging
+                    eprintln!("\n========== Runtime Stuck - Async Task Dump ==========");
+                    eprintln!("{}", async_backtrace::taskdump_tree(true));
+                    eprintln!("====================================================\n");
+
                     break;
                 }
                 // Log periodically to help debugging
@@ -263,6 +269,17 @@ impl Runtime {
                         "Runtime may be stuck - no progress for {} iterations",
                         stuck_counter
                     );
+
+                    // Log async task count periodically
+                    if stuck_counter % 50000 == 0 {
+                        let task_count = async_backtrace::tasks().count();
+                        tracing::warn!(
+                            "Runtime stuck for {} iterations, {} async tasks active",
+                            stuck_counter,
+                            task_count
+                        );
+                    }
+
                     if sleep_duration < (1 << 10) {
                         sleep_duration *= 2;
                     }
@@ -416,6 +433,12 @@ impl Runtime {
                         stuck_counter
                     );
                     self.log_running_task_stat();
+
+                    // Dump async backtrace to help debugging
+                    eprintln!("\n========== block_on Deadlock - Async Task Dump ==========");
+                    eprintln!("{}", async_backtrace::taskdump_tree(true));
+                    eprintln!("========================================================\n");
+
                     panic!("block_on deadlock detected");
                 }
                 // Small yield to avoid busy loop

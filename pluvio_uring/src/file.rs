@@ -20,6 +20,7 @@ impl DmaFile {
     }
 
     /// Read into the provided buffer at the given offset.
+    #[async_backtrace::framed]
     pub async fn read(&self, mut buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Read::new(
@@ -34,6 +35,7 @@ impl DmaFile {
     }
 
     /// Write the buffer at the specified offset.
+    #[async_backtrace::framed]
     pub async fn write(&self, buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Write::new(
@@ -51,6 +53,7 @@ impl DmaFile {
     ///
     /// Returns a tuple of (bytes_read, buffer) so the caller can access
     /// the data read into the buffer.
+    #[async_backtrace::framed]
     pub async fn read_fixed(
         &self,
         buffer: FixedBuffer,
@@ -74,6 +77,7 @@ impl DmaFile {
     ///
     /// Returns a tuple of (bytes_written, buffer) so the caller can
     /// reuse the buffer if needed.
+    #[async_backtrace::framed]
     pub async fn write_fixed(
         &self,
         buffer: FixedBuffer,
@@ -95,6 +99,7 @@ impl DmaFile {
         result.map(|bytes_written| (bytes_written, buffer))
     }
 
+    #[async_backtrace::framed]
     pub async fn fallocate(&self, size: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Fallocate::new(io_uring::types::Fd(fd), size).build();
@@ -102,6 +107,7 @@ impl DmaFile {
         self.reactor.push_sqe(sqe).await
     }
 
+    #[async_backtrace::framed]
     pub async fn fsync(&self) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Fsync::new(io_uring::types::Fd(fd)).build();
@@ -109,6 +115,7 @@ impl DmaFile {
         self.reactor.push_sqe(sqe).await
     }
 
+    #[async_backtrace::framed]
     pub async fn close(&self) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Close::new(io_uring::types::Fd(fd)).build();
@@ -117,6 +124,7 @@ impl DmaFile {
     }
 
     /// Acquire a fixed buffer from the reactor's allocator.
+    #[async_backtrace::framed]
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.reactor.acquire_buffer().await
     }
