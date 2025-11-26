@@ -69,8 +69,7 @@ export UCX_ADAPTIVE_PROGRESS=y
 export UCX_ASYNC_MAX_EVENTS=256
 export UCX_USE_MT_MUTEX=n
 
-# Logging (set to INFO for production, DEBUG for troubleshooting)
-export UCX_LOG_LEVEL="INFO"
+export UCX_LOG_LEVEL="TRACE"
 
 IFS=" " read -r -a nqsii_mpiopts_array <<<"$NQSII_MPIOPTS"
 
@@ -111,6 +110,7 @@ cmd_mpirun=(
   -x UCX_RC_TIMEOUT
   -x UCX_RC_RETRY_COUNT
   -x UCX_RC_TIMEOUT_MULTIPLIER
+  -x UCX_LOG_LEVEL
   -x PATH
 )
 
