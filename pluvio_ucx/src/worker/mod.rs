@@ -108,7 +108,7 @@ impl Worker {
 }
 
 impl Worker {
-    pub fn address(&self) -> Result<async_ucx::ucp::WorkerAddress, async_ucx::Error> {
+    pub fn address(&self) -> Result<async_ucx::ucp::WorkerAddress<'_>, async_ucx::Error> {
         self.worker.address()
     }
 
