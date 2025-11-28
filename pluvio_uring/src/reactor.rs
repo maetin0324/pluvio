@@ -245,7 +245,8 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
         let mut ring = self.ring.borrow_mut();
         let submission = ring.submission();
 
-        let submit_elapsed = {
+        // elapsed()は1回だけ呼び出し、結果を再利用（clock_gettimeのオーバーヘッド削減）
+        let elapsed = {
             let last = self.last_submit_time.borrow();
             last.elapsed()
         };
@@ -253,22 +254,17 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
         let submission_len = submission.len();
         if submission_len >= self.io_uring_params.submit_depth as usize
             || (!submission.is_empty()
-                && submit_elapsed >= self.io_uring_params.wait_submit_timeout)
+                && elapsed >= self.io_uring_params.wait_submit_timeout)
         {
             return ReactorStatus::Running;
         }
 
         // 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
-        let completed_elapsed = {
-            let last = self.last_submit_time.borrow();
-            last.elapsed()
-        };
-
         if self.completed_count.get()
             < self
                 .user_data_counter
                 .load(std::sync::atomic::Ordering::Relaxed)
-            && completed_elapsed >= self.io_uring_params.wait_complete_timeout
+            && elapsed >= self.io_uring_params.wait_complete_timeout
         {
             return ReactorStatus::Running;
         }
