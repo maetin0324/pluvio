@@ -222,7 +222,7 @@ impl Runtime {
                 polling_tasks.push(task);
             }
             for task_id in polling_tasks {
-                if let Poll::Ready(_) = self.poll_task(task_id) {
+                if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     // タスクが完了した場合、タスクを削除
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -236,7 +236,7 @@ impl Runtime {
 
             if let Ok(task_id) = task_id_slot {
                 // タスクを取得してポーリング
-                if let Poll::Ready(_) = self.poll_task(task_id) {
+                if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
@@ -404,7 +404,7 @@ impl Runtime {
                 polling_tasks.push(task_id);
             }
             for task_id in polling_tasks {
-                if let Poll::Ready(_) = self.poll_task(task_id) {
+                if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
@@ -415,7 +415,7 @@ impl Runtime {
 
             // Process regular queue tasks
             if let Ok(task_id) = self.task_receiver.try_recv() {
-                if let Poll::Ready(_) = self.poll_task(task_id) {
+                if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
@@ -479,10 +479,31 @@ impl Runtime {
     }
 
     /// Poll a single task by its id.
-    pub fn poll_task(&self, task_id: usize) -> Poll<()> {
+    ///
+    /// Returns `None` if the task was already removed (e.g., woken multiple times
+    /// and already completed in a previous poll), or `Some(Poll<()>)` with the
+    /// poll result.
+    pub fn poll_task(&self, task_id: usize) -> Option<Poll<()>> {
         let mut binding = self.task_pool.borrow_mut();
-        let task_slot = binding.get_mut(task_id).expect("Task not found");
-        let task = task_slot.take().expect("Task not found");
+
+        // Check if the task still exists - it may have been removed if this
+        // task_id was enqueued multiple times (via multiple wake() calls)
+        // and already completed in a previous poll.
+        let task_slot = match binding.get_mut(task_id) {
+            Some(slot) => slot,
+            None => {
+                tracing::trace!("poll_task: task_id {} already removed, skipping", task_id);
+                return None;
+            }
+        };
+
+        let task = match task_slot.take() {
+            Some(t) => t,
+            None => {
+                tracing::trace!("poll_task: task_id {} slot is empty, skipping", task_id);
+                return None;
+            }
+        };
 
         // Get task name for span
         let task_name = task.task_stat.as_ref()
@@ -496,9 +517,11 @@ impl Runtime {
         let ret = task.poll_task(task_id);
         // taskを再度task_slotに格納
         let mut binding = self.task_pool.borrow_mut();
-        let task_slot = binding.get_mut(task_id).expect("Task not found");
-        task_slot.replace(task);
-        ret
+        // Task should still exist here since we hold the task and haven't removed it
+        if let Some(task_slot) = binding.get_mut(task_id) {
+            task_slot.replace(task);
+        }
+        Some(ret)
     }
 
     /// Progress the runtime by polling reactors and processing a limited number of tasks.
@@ -522,7 +545,7 @@ impl Runtime {
             polling_tasks.push(task_id);
         }
         for task_id in polling_tasks {
-            if let Poll::Ready(_) = self.poll_task(task_id) {
+            if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                 let mut binding = self.task_pool.borrow_mut();
                 let task = binding.get_mut(task_id);
                 self.stat.add_task_stat(task);
@@ -536,7 +559,7 @@ impl Runtime {
         let mut processed = 0;
         while processed < max_tasks_per_call {
             if let Ok(task_id) = self.task_receiver.try_recv() {
-                if let Poll::Ready(_) = self.poll_task(task_id) {
+                if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
