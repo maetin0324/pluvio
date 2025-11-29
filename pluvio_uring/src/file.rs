@@ -13,9 +13,23 @@ pub struct DmaFile {
 }
 
 impl DmaFile {
-    /// Create a new `DmaFile` backed by `file` and associated reactor.
+    /// Create a new `DmaFile` backed by `file` using the thread-local reactor.
+    ///
+    /// # Panics
+    /// Panics if no reactor has been initialized via `IoUringReactorBuilder::build()`.
+    /// This ensures that fixed buffers registered with the reactor are valid for
+    /// operations like `ReadFixed` and `WriteFixed`.
     pub fn new(file: File) -> Self {
         let reactor = IoUringReactor::get_or_init();
+        DmaFile { file, reactor }
+    }
+
+    /// Create a new `DmaFile` backed by `file` and an explicitly provided reactor.
+    ///
+    /// Use this method when you need to ensure the `DmaFile` uses a specific reactor,
+    /// particularly important when using fixed buffers that are registered with
+    /// a particular io_uring instance.
+    pub fn with_reactor(file: File, reactor: Rc<IoUringReactor>) -> Self {
         DmaFile { file, reactor }
     }
 
