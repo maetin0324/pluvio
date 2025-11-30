@@ -251,12 +251,19 @@ impl Drop for FixedBuffer {
                 binding.push(buffer);
             }
         }
+        // Extract the waker while holding the lock, then release the lock before waking.
+        // This prevents deadlock when the woken task immediately tries to acquire a buffer
+        // and needs to access acquire_queue in LazyAcquire::poll().
+        let waker_to_wake = {
+            let mut acquire_queue = self.allocator.acquire_queue.borrow_mut();
+            acquire_queue.pop_front().and_then(|state| {
+                state.borrow_mut().waker.take()
+            })
+        };
         // Notify any waiting tasks that a buffer is now available.
-        let mut acquire_queue = self.allocator.acquire_queue.borrow_mut();
-        if let Some(state) = acquire_queue.pop_front() {
-            if let Some(waker) = state.borrow_mut().waker.take() {
-                waker.wake();
-            }
+        // The lock is released before calling wake() to avoid deadlock.
+        if let Some(waker) = waker_to_wake {
+            waker.wake();
         }
     }
 }
