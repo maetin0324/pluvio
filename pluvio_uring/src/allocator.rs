@@ -22,6 +22,9 @@ use libc::iovec;
 pub struct LazyAcquire {
     state: Rc<RefCell<LazyAcquireState>>,
     allocator: Rc<FixedBufferAllocator>,
+    /// Track whether this future has already been added to the acquire queue.
+    /// This prevents duplicate entries when the future is polled multiple times.
+    queued: bool,
 }
 
 impl Future for LazyAcquire {
@@ -31,17 +34,28 @@ impl Future for LazyAcquire {
         if let Some(buffer) = this.allocator.acquire_inner() {
             Poll::Ready(buffer)
         } else {
-            // If no buffer is available, register the waker and return Pending.
-            let state_clone = Rc::clone(&this.state);
+            // Always update the waker in case the executor changed it
             {
                 this.state.borrow_mut().waker = Some(cx.waker().clone());
             }
-            // Add the state to the acquire queue.
-            {
+
+            // Only add to the queue if we haven't been queued yet.
+            // This prevents duplicate entries when the future is polled multiple times
+            // before a buffer becomes available.
+            if !this.queued {
+                let state_clone = Rc::clone(&this.state);
                 this.allocator
                     .acquire_queue
                     .borrow_mut()
                     .push_back(state_clone);
+                this.queued = true;
+
+                // Log buffer pool exhaustion warning
+                let queue_len = this.allocator.acquire_queue.borrow().len();
+                tracing::warn!(
+                    "Buffer pool exhausted: free=0, waiting={}",
+                    queue_len
+                );
             }
 
             Poll::Pending
@@ -55,6 +69,7 @@ impl LazyAcquire {
         LazyAcquire {
             state: Rc::new(RefCell::new(LazyAcquireState { waker: None })),
             allocator,
+            queued: false,
         }
     }
 }
@@ -120,6 +135,13 @@ impl FixedBufferAllocator {
 
     /// Try to acquire a buffer without waiting.
     fn acquire_inner(self: &Rc<Self>) -> Option<FixedBuffer> {
+        let free_count = self.buffers.borrow().len();
+        let queue_len = self.acquire_queue.borrow().len();
+        tracing::trace!(
+            "FixedBufferAllocator::acquire: free={}, waiting={}",
+            free_count, queue_len
+        );
+
         let mut buffers = self.buffers.borrow_mut();
         buffers.pop().map(|fixed_buf| {
             let buffer = FixedBuffer {
@@ -251,6 +273,15 @@ impl Drop for FixedBuffer {
                 binding.push(buffer);
             }
         }
+
+        // Log buffer release
+        let free_count = self.allocator.buffers.borrow().len();
+        let queue_len = self.allocator.acquire_queue.borrow().len();
+        tracing::trace!(
+            "FixedBuffer::drop: free={}, waiting={}",
+            free_count, queue_len
+        );
+
         // Extract the waker while holding the lock, then release the lock before waking.
         // This prevents deadlock when the woken task immediately tries to acquire a buffer
         // and needs to access acquire_queue in LazyAcquire::poll().
@@ -263,6 +294,7 @@ impl Drop for FixedBuffer {
         // Notify any waiting tasks that a buffer is now available.
         // The lock is released before calling wake() to avoid deadlock.
         if let Some(waker) = waker_to_wake {
+            tracing::trace!("FixedBuffer::drop: waking waiting task");
             waker.wake();
         }
     }

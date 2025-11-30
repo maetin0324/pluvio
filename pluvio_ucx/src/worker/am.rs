@@ -38,6 +38,10 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
+        tracing::trace!(
+            "am_send: start, id={}, header_len={}, data_len={}, need_reply={}, proto={:?}",
+            id, header.len(), data.len(), need_reply, proto
+        );
         self.worker.activate();
         let ret = self
             .endpoint
@@ -45,6 +49,7 @@ impl Endpoint {
             .await;
         // Do not deactivate here - messages may still be in flight in UCX layer
         // Let the reactor manage worker state based on actual activity
+        tracing::trace!("am_send: complete, result={:?}", ret.is_ok());
         ret
     }
 
@@ -57,6 +62,11 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
+        let total_len: usize = iov.iter().map(|s| s.len()).sum();
+        tracing::trace!(
+            "am_send_vectorized: start, id={}, header_len={}, data_len={}, iov_count={}, need_reply={}, proto={:?}",
+            id, header.len(), total_len, iov.len(), need_reply, proto
+        );
         self.worker.activate();
         let ret = self
             .endpoint
@@ -64,6 +74,7 @@ impl Endpoint {
             .await;
         // Do not deactivate here - messages may still be in flight in UCX layer
         // Let the reactor manage worker state based on actual activity
+        tracing::trace!("am_send_vectorized: complete, result={:?}", ret.is_ok());
         ret
     }
 }
@@ -71,9 +82,14 @@ impl Endpoint {
 impl AmStream {
     #[async_backtrace::framed]
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
+        tracing::trace!("AmStream::wait_msg: start, stream_id={}", self.id);
         self.worker.wait_connect();
         let ret = self.stream.wait_msg().await;
         self.worker.deactivate();
+        tracing::trace!(
+            "AmStream::wait_msg: complete, stream_id={}, received={}",
+            self.id, ret.is_some()
+        );
         ret
     }
 }

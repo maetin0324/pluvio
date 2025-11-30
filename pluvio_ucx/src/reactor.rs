@@ -48,8 +48,14 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
     fn status(&self) -> ReactorStatus {
         let workers = self.registered_workers.borrow();
 
-        for (_, worker) in workers.iter() {
-            match worker.state() {
+        for (id, worker) in workers.iter() {
+            let state = worker.state();
+            tracing::trace!(
+                "UCXReactor::status: worker_id={}, state={:?}",
+                id, state
+            );
+
+            match state {
                 crate::worker::WorkerState::Active => {
                     return ReactorStatus::Running;
                 }
@@ -66,7 +72,11 @@ impl pluvio_runtime::reactor::Reactor for UCXReactor {
 
     fn poll(&self) {
         let workers = self.registered_workers.borrow();
-        for (_, worker) in workers.iter() {
+        for (id, worker) in workers.iter() {
+            tracing::trace!(
+                "UCXReactor::poll: worker_id={}, state={:?}",
+                id, worker.state()
+            );
             worker.inner().progress();
         }
     }
