@@ -143,10 +143,6 @@ impl IoUringReactor {
         // CQの処理
 
         let cq = ring.completion();
-        let cq_len = cq.len();
-        if cq_len > 0 {
-            tracing::trace!("IoUringReactor::poll: processing {} completions", cq_len);
-        }
 
         for cqe in cq {
             let user_data = cqe.user_data();
@@ -255,18 +251,7 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
             last.elapsed()
         };
 
-        let submitted_count = self
-            .user_data_counter
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let completed_count = self.completed_count.get();
-        let pending_count = submitted_count - completed_count;
         let submission_len = submission.len();
-
-        tracing::trace!(
-            "IoUringReactor::status: submitted={}, completed={}, pending={}, sq_len={}",
-            submitted_count, completed_count, pending_count, submission_len
-        );
-
         if submission_len >= self.io_uring_params.submit_depth as usize
             || (!submission.is_empty()
                 && elapsed >= self.io_uring_params.wait_submit_timeout)
@@ -275,7 +260,10 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
         }
 
         // 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
-        if completed_count < submitted_count
+        if self.completed_count.get()
+            < self
+                .user_data_counter
+                .load(std::sync::atomic::Ordering::Relaxed)
             && elapsed >= self.io_uring_params.wait_complete_timeout
         {
             return ReactorStatus::Running;
