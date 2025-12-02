@@ -4,6 +4,7 @@ use crate::worker::{endpoint::Endpoint, Worker};
 
 pub type AmStreamInner = async_ucx::ucp::AmStream;
 
+#[derive(Clone)]
 pub struct AmStream {
     stream: AmStreamInner,
     worker: Rc<Worker>,
@@ -75,6 +76,12 @@ impl AmStream {
         let ret = self.stream.wait_msg().await;
         self.worker.deactivate();
         ret
+    }
+
+    /// Close the stream and wake up all waiting tasks.
+    /// After calling this, `wait_msg()` will return `None` for any waiting tasks.
+    pub fn close(&self) {
+        self.stream.close();
     }
 }
 
