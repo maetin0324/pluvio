@@ -26,14 +26,14 @@ fn main() -> anyhow::Result<()> {
     let ucx_reactor = UCXReactor::current();
     runtime.register_reactor("ucx_reactor", ucx_reactor.clone());
     if let Some(server_addr) = std::env::args().nth(1) {
-        runtime.clone().run_with_name(
+        runtime.clone().run_with_name_and_runtime(
             "ucx_example_client",
             client(server_addr, runtime, ucx_reactor),
         );
     } else {
         runtime
             .clone()
-            .run_with_name("ucx_example_server", server(runtime, ucx_reactor));
+            .run_with_name_and_runtime("ucx_example_server", server(runtime, ucx_reactor));
     }
     Ok(())
 }
@@ -152,7 +152,7 @@ async fn server(runtime: Rc<Runtime>, reactor: Rc<UCXReactor>) -> anyhow::Result
     // let epc = ep.clone();
     let stream = stream.clone();
     let runtime = runtime.clone();
-    let jh = runtime.clone().spawn(async move {
+    let jh = runtime.clone().spawn_with_runtime(async move {
         // epをmoveしないとspawn後にdropされてcloseされてしまう
         // let _ep = epc;
         // let runtime_clone = runtime.clone();

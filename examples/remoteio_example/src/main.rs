@@ -49,11 +49,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(server_addr) = std::env::args().nth(1) {
         runtime
             .clone()
-            .run_with_name("remoteio_client", client(server_addr, runtime, ucx_reactor));
+            .run_with_name_and_runtime("remoteio_client", client(server_addr, runtime, ucx_reactor));
     } else {
         runtime
             .clone()
-            .run_with_name("remoteio_server", server(runtime, ucx_reactor));
+            .run_with_name_and_runtime("remoteio_server", server(runtime, ucx_reactor));
     }
     Ok(())
 }
@@ -201,7 +201,7 @@ async fn server(runtime: Rc<Runtime>, ucx_reactor: Rc<UCXReactor>) -> anyhow::Re
         let header = msg.header();
         let offset = usize::from_le_bytes(header[0..8].try_into().unwrap());
 
-        let jh = runtime.spawn_with_name(
+        let jh = runtime.spawn_with_name_and_runtime(
             write_task(dma_file.clone(), offset, msg),
             format!("write_task_{}", i),
         );

@@ -3,6 +3,7 @@
 
 use futures::stream::StreamExt;
 use pluvio_runtime::executor::Runtime;
+use pluvio_runtime::set_runtime;
 use pluvio_uring::file::DmaFile;
 use pluvio_uring::prepare_buffer;
 use pluvio_uring::reactor::{IoUringReactor, register_file};
@@ -13,7 +14,7 @@ use std::{fs::File, os::fd::AsRawFd, sync::Arc};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-static TOTAL_SIZE: usize = 128 << 30;
+static TOTAL_SIZE: usize = 16 << 30;
 static BUFFER_SIZE: usize = 1 << 20; // 1 MiB
 
 /// Entry point of the example application.
@@ -25,19 +26,20 @@ fn main() {
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
 
-    let runtime = Runtime::new(1024);
+    let runtime = Runtime::new(1 << 12);
     let reactor = IoUringReactor::builder()
         .queue_size(2048)
         .buffer_size(BUFFER_SIZE)
-        .submit_depth(64)
-        .wait_submit_timeout(Duration::from_millis(100))
-        .wait_complete_timeout(Duration::from_millis(150))
+        .submit_depth(256)
+        .wait_submit_timeout(Duration::from_millis(10))
+        .wait_complete_timeout(Duration::from_millis(30))
         .build();
 
     runtime.register_reactor("io_uring_reactor", reactor);
-    runtime
-        .clone()
-        .run_with_name("uring_example_main", async move {
+    
+    set_runtime(runtime.clone());
+
+    pluvio_runtime::run_with_name("uring_example_main", async move {
             let file = File::options()
                 .create(true)
                 .truncate(true)
@@ -59,8 +61,6 @@ fn main() {
                 .fallocate(TOTAL_SIZE as u64)
                 .await
                 .expect("fallocate failed");
-
-            let handles = futures::stream::FuturesUnordered::new();
             // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
             //     let buffer = vec![0x61; BUFFER_SIZE];
             //     let reactor = reactor.clone();
@@ -74,21 +74,25 @@ fn main() {
             // }
 
             let now = std::time::Instant::now();
+            let mut inflight = 0usize;
+            let mut handles = futures::stream::FuturesUnordered::new();
             for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
                 let file = dma_file.clone();
                 let buffer = file.acquire_buffer().await;
                 // tracing::debug!("fill buffer with 0x61");
                 let offset = (i * BUFFER_SIZE) as u64;
-                let handle = runtime.clone().spawn_with_name(
+                let handle = pluvio_runtime::spawn_polling_with_name(
                     async move {
                         // write_fixed now returns (bytes_written, buffer)
                         file.write_fixed(buffer, offset)
                             .await
                             .map(|(bytes, _buf)| bytes)
                     },
-                    format!("write_fixed_{}", i),
+                    format!("read_fixed_{}", i),
                 );
                 handles.push(handle);
+
+                inflight += 1;
             }
 
             tracing::debug!("all tasks added to queue");
