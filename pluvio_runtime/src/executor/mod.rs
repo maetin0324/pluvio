@@ -44,6 +44,8 @@ pub struct Runtime {
     pub polling_task_receiver: Receiver<usize>,
     pub task_pool: Rc<RefCell<Slab<Option<Task>>>>,
     stat: RuntimeStat,
+    /// Flag to request graceful shutdown of the runtime
+    shutdown_requested: Cell<bool>,
 }
 
 // Thread-local storage for the runtime
@@ -67,6 +69,7 @@ impl Runtime {
             polling_task_receiver,
             task_pool,
             stat: RuntimeStat::new(),
+            shutdown_requested: Cell::new(false),
         })
     }
 
@@ -80,6 +83,20 @@ impl Runtime {
                     tracing::info!("Set runtime affinity to CPU {}", cpu_id);
                 });
         }
+    }
+
+    /// Request graceful shutdown of the runtime.
+    ///
+    /// This will cause `run_queue()` to exit after the current iteration,
+    /// even if there are still pending tasks.
+    pub fn request_shutdown(&self) {
+        tracing::info!("Runtime shutdown requested");
+        self.shutdown_requested.set(true);
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.get()
     }
 
     /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
@@ -197,6 +214,16 @@ impl Runtime {
         let mut sleep_duration = 1;
 
         while self.task_pool.borrow().len() > 0 {
+            // Check for shutdown request
+            if self.shutdown_requested.get() {
+                let remaining_tasks = self.task_pool.borrow().len();
+                tracing::info!(
+                    "Runtime shutdown requested, exiting run_queue with {} tasks remaining",
+                    remaining_tasks
+                );
+                break;
+            }
+
             let mut made_progress = false;
 
             // IMPORTANT: Poll reactors FIRST to receive messages and wake tasks
