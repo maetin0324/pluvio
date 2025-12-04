@@ -36,16 +36,19 @@ pub struct Worker {
 pub type WorkerAddressInner = async_ucx::ucp::WorkerAddressInner;
 
 impl Context {
+    #[tracing::instrument(level = "trace")]
     pub fn new() -> Result<Self, async_ucx::Error> {
         let context = async_ucx::ucp::Context::new()?;
         Ok(Self { context })
     }
 
+    #[tracing::instrument(level = "trace", skip(config))]
     pub fn new_with_config(config: &async_ucx::ucp::Config) -> Result<Self, async_ucx::Error> {
         let context = async_ucx::ucp::Context::new_with_config(config)?;
         Ok(Self { context })
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn create_worker(&self) -> Result<Rc<Worker>, async_ucx::Error> {
         let worker = self.context.create_worker()?;
         Ok(Worker::new(worker))
@@ -55,12 +58,14 @@ impl Context {
         &self.context
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn print_to_stderr(&self) {
         self.context.print_to_stderr();
     }
 }
 
 impl Worker {
+    #[tracing::instrument(level = "trace", skip(worker))]
     pub fn new(worker: Rc<async_ucx::ucp::Worker>) -> Rc<Self> {
         let worker = Rc::new(Self {
             id: Cell::new(0),
@@ -74,6 +79,7 @@ impl Worker {
         worker
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn state(&self) -> WorkerState {
         self.state.get()
     }
@@ -108,10 +114,12 @@ impl Worker {
 }
 
 impl Worker {
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn address(&self) -> Result<async_ucx::ucp::WorkerAddress<'_>, async_ucx::Error> {
         self.worker.address()
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn create_listener(
         self: &Rc<Self>,
         addr: SocketAddr,
@@ -135,6 +143,7 @@ impl Worker {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self, addr))]
     pub fn connect_addr(
         self: &Rc<Self>,
         addr: &WorkerAddressInner,
@@ -152,6 +161,7 @@ impl Worker {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn connect_socket(
         self: &Rc<Self>,
         addr: SocketAddr,
@@ -169,6 +179,7 @@ impl Worker {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, connection))]
     pub async fn accept(
         self: &Rc<Self>,
         connection: async_ucx::ucp::ConnectionRequest,
@@ -186,6 +197,7 @@ impl Worker {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn tag_recv(
         &self,
         tag: u64,
@@ -198,6 +210,7 @@ impl Worker {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn tag_recv_mask(
         &self,
         tag: u64,
@@ -211,6 +224,7 @@ impl Worker {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, iov))]
     pub async fn tag_recv_vectored(
         &self,
         tag: u64,

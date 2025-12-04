@@ -75,6 +75,7 @@ pub struct FixedBufferAllocator {
 impl FixedBufferAllocator {
     /// Creates a new allocator with `queue_size` buffers of `buffer_size` each.
     /// The buffers are registered with the provided `ring` as iovecs.
+    #[tracing::instrument(level = "trace", skip(ring))]
     pub fn new(queue_size: usize, buffer_size: usize, ring: &mut IoUring) -> Rc<Self> {
         let queue_size = queue_size;
         let mut buffers = Vec::with_capacity(queue_size);
@@ -114,6 +115,7 @@ impl FixedBufferAllocator {
     /// Acquires an available buffer. Returns a WriteFixedBuffer handle.
     /// Acquire a buffer asynchronously.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn acquire(self: &Rc<Self>) -> FixedBuffer {
         LazyAcquire::new(Rc::clone(self)).await
     }
@@ -131,6 +133,7 @@ impl FixedBufferAllocator {
     }
 
     /// Percentage of buffers currently in use.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn used_buffers(&self) -> f64 {
         let (total, free) = {
             let binding = self.buffers.borrow();
@@ -144,6 +147,7 @@ impl FixedBufferAllocator {
     }
 
     /// Fill all buffers with the provided byte value.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn fill_buffers(&self, data: u8) {
         let mut binding = self.buffers.borrow_mut();
         for buf in binding.iter_mut() {
@@ -201,6 +205,7 @@ impl FixedBuffer {
     // }
 
     /// Pointer to the start of the buffer.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn as_ptr(&self) -> *const u8 {
         self.buffer
             .as_ref()
@@ -208,16 +213,19 @@ impl FixedBuffer {
     }
 
     /// Length of the buffer in bytes.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn len(&self) -> usize {
         self.buffer.as_ref().map_or(0, |buf| buf.as_slice().len())
     }
 
     /// Index of this buffer within the allocator.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn index(&self) -> usize {
         self.buffer.as_ref().map_or(0, |buf| buf.index)
     }
 
     /// Mutable slice to the underlying memory region.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.buffer
             .as_mut()

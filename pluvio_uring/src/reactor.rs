@@ -88,10 +88,12 @@ impl Future for WaitHandle {
 
 impl IoUringReactor {
     /// Create a reactor with default parameters.
+    #[tracing::instrument(level = "trace")]
     pub fn new() -> Rc<Self> {
         IoUringReactorBuilder::default().build()
     }
 
+    #[tracing::instrument(level = "trace", skip(reactor))]
     pub fn init(reactor: Rc<Self>) -> Result<(), String> {
         IOURING_REACTOR.with(|cell| {
             cell.set(reactor)
@@ -99,6 +101,7 @@ impl IoUringReactor {
         })
     }
 
+    #[tracing::instrument(level = "trace")]
     pub fn get_or_init() -> Rc<IoUringReactor> {
         IOURING_REACTOR.with(|cell| {
             let reactor_ref = cell.get_or_init(move || IoUringReactorBuilder::default().build());
@@ -106,11 +109,13 @@ impl IoUringReactor {
         })
     }
 
+    #[tracing::instrument(level = "trace")]
     pub fn builder() -> IoUringReactorBuilder {
         IoUringReactorBuilder::new()
     }
 
     /// Push an SQE to the ring and return a [`WaitHandle`] for its completion.
+    #[tracing::instrument(level = "trace", skip(self, sqe))]
     pub fn push_sqe(&self, sqe: io_uring::squeue::Entry) -> WaitHandle {
         let user_data = self
             .user_data_counter
@@ -130,6 +135,7 @@ impl IoUringReactor {
     }
 
     /// Submit all pending SQEs and process completions.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn poll_submit_and_completions(&self) {
         let mut ring = self.ring.borrow_mut();
 
@@ -192,16 +198,19 @@ impl IoUringReactor {
 
     /// Acquire a fixed buffer from the internal allocator.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.allocator.acquire().await
     }
 
     /// Returns `true` if there are no pending completions.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn is_empty(&self) -> bool {
         let completions = self.completions.borrow_mut();
         completions.is_empty()
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn completion_debug_info(&self) {
         tracing::debug!(
             "submitted_count: {}",
@@ -212,6 +221,7 @@ impl IoUringReactor {
     }
 
     /// Blockingly wait for at least one completion.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn wait_cqueue(&self) -> bool {
         let ring = self.ring.borrow_mut();
         // 完了数が発行数より少ない場合にio_uring_enterを実行
@@ -228,11 +238,13 @@ impl IoUringReactor {
     }
 
     /// Number of completions processed by this reactor.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn completed_count(&self) -> u64 {
         self.completed_count.get()
     }
 }
 
+#[tracing::instrument(level = "trace")]
 pub fn register_file(fd: i32) {
     let reactor = IoUringReactor::get_or_init();
     let ring = reactor.ring.borrow_mut();

@@ -19,6 +19,7 @@ impl DmaFile {
     /// Panics if no reactor has been initialized via `IoUringReactorBuilder::build()`.
     /// This ensures that fixed buffers registered with the reactor are valid for
     /// operations like `ReadFixed` and `WriteFixed`.
+    #[tracing::instrument(level = "trace", skip(file))]
     pub fn new(file: File) -> Self {
         let reactor = IoUringReactor::get_or_init();
         DmaFile { file, reactor }
@@ -29,12 +30,14 @@ impl DmaFile {
     /// Use this method when you need to ensure the `DmaFile` uses a specific reactor,
     /// particularly important when using fixed buffers that are registered with
     /// a particular io_uring instance.
+    #[tracing::instrument(level = "trace", skip(file, reactor))]
     pub fn with_reactor(file: File, reactor: Rc<IoUringReactor>) -> Self {
         DmaFile { file, reactor }
     }
 
     /// Read into the provided buffer at the given offset.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn read(&self, mut buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Read::new(
@@ -50,6 +53,7 @@ impl DmaFile {
 
     /// Write the buffer at the specified offset.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn write(&self, buffer: Vec<u8>, offset: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Write::new(
@@ -68,6 +72,7 @@ impl DmaFile {
     /// Returns a tuple of (bytes_read, buffer) so the caller can access
     /// the data read into the buffer.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn read_fixed(
         &self,
         buffer: FixedBuffer,
@@ -92,6 +97,7 @@ impl DmaFile {
     /// Returns a tuple of (bytes_written, buffer) so the caller can
     /// reuse the buffer if needed.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self, buffer))]
     pub async fn write_fixed(
         &self,
         buffer: FixedBuffer,
@@ -114,6 +120,7 @@ impl DmaFile {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn fallocate(&self, size: u64) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Fallocate::new(io_uring::types::Fd(fd), size).build();
@@ -122,6 +129,7 @@ impl DmaFile {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn fsync(&self) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Fsync::new(io_uring::types::Fd(fd)).build();
@@ -130,6 +138,7 @@ impl DmaFile {
     }
 
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn close(&self) -> std::io::Result<i32> {
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::Close::new(io_uring::types::Fd(fd)).build();
@@ -139,6 +148,7 @@ impl DmaFile {
 
     /// Acquire a fixed buffer from the reactor's allocator.
     #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.reactor.acquire_buffer().await
     }

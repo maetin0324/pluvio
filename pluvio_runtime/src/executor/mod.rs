@@ -56,6 +56,7 @@ thread_local! {
 
 impl Runtime {
     /// Creates a new runtime with an internal task queue of `queue_size`.
+    #[tracing::instrument(level = "trace")]
     pub fn new(queue_size: u64) -> Rc<Self> {
         // allocator.fill_buffers(0x61);
         let (task_sender, task_receiver) = unbounded();
@@ -73,6 +74,7 @@ impl Runtime {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn set_affinity(&self, cpu_id: usize) {
         #[cfg(target_os = "linux")]
         {
@@ -89,18 +91,21 @@ impl Runtime {
     ///
     /// This will cause `run_queue()` to exit after the current iteration,
     /// even if there are still pending tasks.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn request_shutdown(&self) {
         tracing::info!("Runtime shutdown requested");
         self.shutdown_requested.set(true);
     }
 
     /// Check if shutdown has been requested.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn is_shutdown_requested(&self) -> bool {
         self.shutdown_requested.get()
     }
 
     /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
     /// its result. This version explicitly takes a runtime reference.
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -121,6 +126,7 @@ impl Runtime {
 
     /// Spawn a task that will be polled in a dedicated polling queue.
     /// This version explicitly takes a runtime reference.
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_polling_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -144,6 +150,7 @@ impl Runtime {
 
     /// Spawn a task and associate a name with it for statistics.
     /// This version explicitly takes a runtime reference.
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -165,6 +172,7 @@ impl Runtime {
 
     /// Spawn a task to the polling queue with a specific name for
     /// statistics purposes. This version explicitly takes a runtime reference.
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_polling_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
@@ -187,6 +195,7 @@ impl Runtime {
     }
 
     /// Register a reactor instance with this runtime.
+    #[tracing::instrument(level = "trace", skip(self, reactor))]
     pub fn register_reactor<R>(&self, id: &'static str, reactor: R)
     where
         R: Reactor + 'static,
@@ -201,6 +210,7 @@ impl Runtime {
     }
 
     /// Run tasks until the task pool becomes empty.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn run_queue(&self) {
         let mut _nooped = 0;
         let mut stuck_counter: u64 = 0;
@@ -342,6 +352,7 @@ impl Runtime {
     ///     some_async_operation().await
     /// });
     /// ```
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn block_on_with_runtime<F, T>(&self, future: F) -> T
     where
         F: Future<Output = T> + 'static,
@@ -362,11 +373,12 @@ impl Runtime {
     /// # Returns
     ///
     /// The output of the future once it completes
+    #[tracing::instrument(level = "trace", skip(self, future, task_name))]
     pub fn block_on_with_name_and_runtime<F, T, S>(&self, task_name: S, future: F) -> T
     where
         F: Future<Output = T> + 'static,
         T: 'static,
-        S: Into<String>,
+        S: Into<String> + std::fmt::Debug,
     {
         // Wrap the future to capture its result
         let result_holder = Rc::new(RefCell::new(None));
@@ -482,6 +494,7 @@ impl Runtime {
 
     /// Run the provided future to completion, driving the event loop.
     /// This version explicitly takes a runtime reference.
+    #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn run_with_runtime<F, T>(&self, future: F)
     where
         F: Future<Output = T> + 'static,
@@ -495,11 +508,12 @@ impl Runtime {
     ///
     /// NOTE: This runs ALL tasks in the queue until completion. For blocking on
     /// a single task without waiting for background tasks, use `block_on_with_runtime`.
+    #[tracing::instrument(level = "trace", skip(self, future, task_name))]
     pub fn run_with_name_and_runtime<F, T, S>(&self, task_name: S, future: F)
     where
         F: Future<Output = T> + 'static,
         T: 'static,
-        S: Into<String>,
+        S: Into<String> + std::fmt::Debug,
     {
         self.spawn_with_name_and_runtime(future, task_name.into());
         self.run_queue();
@@ -510,6 +524,7 @@ impl Runtime {
     /// Returns `None` if the task was already removed (e.g., woken multiple times
     /// and already completed in a previous poll), or `Some(Poll<()>)` with the
     /// poll result.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn poll_task(&self, task_id: usize) -> Option<Poll<()>> {
         let mut binding = self.task_pool.borrow_mut();
 
@@ -553,6 +568,7 @@ impl Runtime {
 
     /// Progress the runtime by polling reactors and processing a limited number of tasks.
     /// This is useful for incremental runtime progress in a loop without blocking.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn progress(&self) {
         // Poll all enabled reactors to drive I/O progress
         for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
@@ -599,6 +615,7 @@ impl Runtime {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn log_running_task_stat(&self) {
         let binding = self.task_pool.borrow();
         let running_task_stats = binding
@@ -609,6 +626,7 @@ impl Runtime {
     }
 
     /// Output runtime statistics to the log.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn log_stat(&self) {
         let binding = self.task_pool.borrow();
         let running_task_stats = binding
@@ -620,6 +638,7 @@ impl Runtime {
     }
 
     /// Retrieve statistics for tasks that contain the specified name.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_stats_by_name(&self, name: &str) -> Vec<crate::task::stat::TaskStat> {
         let binding = self.task_pool.borrow();
         let running_stats = binding
@@ -651,6 +670,7 @@ impl Runtime {
     }
 
     /// Get the total execution time for tasks whose name matches `name`.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_total_time(&self, name: &str) -> u64 {
         let binding = self.stat.finished_task_stats.borrow();
         let total_time = binding
@@ -662,11 +682,13 @@ impl Runtime {
     }
 
     /// Total time spent polling reactors in nanoseconds.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_reactor_polling_time(&self) -> u64 {
         self.stat.pool_and_completion_time.get()
     }
 
     /// Return statistics of the task that took the longest real time.
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn get_longest_running_task(&self) -> Option<crate::task::stat::TaskStat> {
         let binding = self.stat.finished_task_stats.borrow();
         let finished_stats = binding
@@ -792,7 +814,7 @@ pub fn run_with_name<F, T, S>(task_name: S, future: F)
 where
     F: Future<Output = T> + 'static,
     T: 'static,
-    S: Into<String>,
+    S: Into<String> + std::fmt::Debug,
 {
     get_runtime()
         .expect("No runtime set in thread-local storage. Call set_runtime first.")

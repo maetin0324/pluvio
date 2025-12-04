@@ -114,10 +114,12 @@ impl Default for TimerReactor {
 
 impl TimerReactor {
     /// Create a new timer reactor
+    #[tracing::instrument(level = "trace")]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[tracing::instrument(level = "trace")]
     pub fn current() -> Rc<Self> {
         PLUVIO_TIMER_REACTOR.with(|r| r.clone())
     }
@@ -125,6 +127,7 @@ impl TimerReactor {
     /// Register a timer that will wake the given waker at the specified deadline
     ///
     /// Returns a timer handle that can be used to cancel the timer
+    #[tracing::instrument(level = "trace", skip(self, waker))]
     pub fn register_timer(&self, deadline: Instant, waker: Waker) -> TimerHandle {
         let handle = TimerHandle::new(deadline);
         self.timers.borrow_mut().insert(handle, waker);
@@ -139,11 +142,13 @@ impl TimerReactor {
     /// Cancel a timer by its handle
     ///
     /// Returns true if the timer was found and canceled, false otherwise
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn cancel_timer(&self, handle: TimerHandle) -> bool {
         self.timers.borrow_mut().remove(&handle).is_some()
     }
 
     /// Get the number of pending timers
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn timer_count(&self) -> usize {
         self.timers.borrow().len()
     }
@@ -217,11 +222,13 @@ pub struct Delay {
 
 impl Delay {
     /// Create a new delay that will complete after the given duration
+    #[tracing::instrument(level = "trace")]
     pub fn new(duration: Duration) -> Self {
         Self::new_at(Instant::now() + duration)
     }
 
     /// Create a delay with an absolute deadline
+    #[tracing::instrument(level = "trace")]
     pub fn new_at(deadline: Instant) -> Self {
         Self {
             deadline,
@@ -231,11 +238,13 @@ impl Delay {
     }
 
     /// Get the deadline for this delay
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn deadline(&self) -> Instant {
         self.deadline
     }
 
     /// Get the remaining duration until the deadline
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn remaining(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
@@ -274,6 +283,7 @@ impl std::future::Future for Delay {
     }
 }
 
+#[tracing::instrument(level = "trace")]
 pub fn sleep(duration: Duration) -> Delay {
     Delay::new(duration)
 }

@@ -17,6 +17,7 @@ pub struct UCXReactor {
 }
 
 impl UCXReactor {
+    #[tracing::instrument(level = "trace")]
     pub fn new() -> Self {
         // Read timeout from environment variable or use default of 30 seconds
         let timeout_secs = std::env::var("PLUVIO_CONNECTION_TIMEOUT")
@@ -31,14 +32,17 @@ impl UCXReactor {
         }
     }
 
+    #[tracing::instrument(level = "trace")]
     pub fn current() -> Rc<Self> {
         PLUVIO_UCX_REACTOR.with(|cell| cell.get_or_init(|| Rc::new(Self::new())).clone())
     }
 
+    #[tracing::instrument(level = "trace", skip(self, worker))]
     pub fn register_worker(&self, worker: Rc<Worker>) -> usize {
         self.registered_workers.borrow_mut().insert(worker)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn unregister_worker(&self, id: usize) {
         self.registered_workers.borrow_mut().remove(id);
     }
