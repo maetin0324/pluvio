@@ -36,6 +36,7 @@ pub(crate) struct IoUringParams {
     pub(crate) submit_depth: u32,
     pub(crate) wait_submit_timeout: Duration,
     pub(crate) wait_complete_timeout: Duration,
+    pub(crate) sq_poll: Option<u32>,
 }
 
 /// State shared between the reactor and a waiting future.
@@ -132,8 +133,16 @@ impl IoUringReactor {
     pub fn poll_submit_and_completions(&self) {
         let mut ring = self.ring.borrow_mut();
 
+        if let Some(_) = self.io_uring_params.sq_poll {
+            // SQPOLLモードの場合、submitは不要
+            // SQEの送信はスキップ
+        } else {
+            // SQE の送信
+            ring.submit().expect("Failed to submit SQE");
+        }
+
         // SQE の送信
-        ring.submit().expect("Failed to submit SQE");
+        // ring.submit().expect("Failed to submit SQE");
         // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
         // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
 
@@ -251,13 +260,15 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
             last.elapsed()
         };
 
-        let submission_len = submission.len();
-        if submission_len >= self.io_uring_params.submit_depth as usize
-            || (!submission.is_empty()
-                && elapsed >= self.io_uring_params.wait_submit_timeout)
-        {
-            return ReactorStatus::Running;
-        }
+        if let Some(_) = self.io_uring_params.sq_poll {
+            let submission_len = submission.len();
+            if submission_len >= self.io_uring_params.submit_depth as usize
+                || (!submission.is_empty()
+                    && elapsed >= self.io_uring_params.wait_submit_timeout)
+            {
+                return ReactorStatus::Running;
+            }
+        } 
 
         // 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
         if self.completed_count.get()

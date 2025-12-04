@@ -15,7 +15,29 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static TOTAL_SIZE: usize = 16 << 30;
-static BUFFER_SIZE: usize = 1 << 20; // 1 MiB
+static BUFFER_SIZE: usize = 1 << 20; // 1 MiB to match fio
+static IODEPTH: usize = 64; // Match fio's iodepth
+
+// sigintの時にasync-backtraceをダンプして終了する
+// signal-handlerをlibc経由で登録
+pub fn setup_signal_handlers() {
+    // Setup SIGINT (Ctrl+C), SIGTERM, and SIGUSR1 handlers
+    #[cfg(unix)]
+    {
+        use libc::SIGINT;
+        unsafe {
+            libc::signal(SIGINT, taskdump_signal_handler as libc::sighandler_t);
+        }
+    }
+
+    #[cfg(unix)]
+    extern "C" fn taskdump_signal_handler(_: libc::c_int) {
+        eprintln!("\nReceived SIGINT, dumping async task backtraces...");
+        async_backtrace::taskdump_tree(true);
+        std::process::exit(1);
+    }
+}
+
 
 /// Entry point of the example application.
 fn main() {
@@ -27,99 +49,98 @@ fn main() {
         .init();
 
     let runtime = Runtime::new(1 << 12);
+    // Match fio configuration
     let reactor = IoUringReactor::builder()
-        .queue_size(2048)
+        .queue_size(256) // Enough for iodepth + headroom
         .buffer_size(BUFFER_SIZE)
-        .submit_depth(256)
-        .wait_submit_timeout(Duration::from_millis(10))
-        .wait_complete_timeout(Duration::from_millis(30))
+        .submit_depth(IODEPTH as u32) // Submit when we have iodepth entries
+        .wait_submit_timeout(Duration::from_micros(0)) // Submit immediately
+        .wait_complete_timeout(Duration::from_micros(0)) // Check completions immediately
+        .sq_poll(50) // Enable SQPOLL with no CPU affinity
         .build();
 
     runtime.register_reactor("io_uring_reactor", reactor);
-    
+
     set_runtime(runtime.clone());
 
+    setup_signal_handlers();
+
     pluvio_runtime::run_with_name("uring_example_main", async move {
+            // Use fio's test file for read benchmark
             let file = File::options()
-                .create(true)
-                .truncate(true)
                 .read(true)
-                .write(true)
                 .custom_flags(libc::O_DIRECT)
-                .open("/local/rmaeda/pluvio_test.txt")
+                .open("/local/rmaeda/fio_test.txt")
                 .expect("Failed to open file");
             let fd = file.as_raw_fd();
-
-            file.set_len(TOTAL_SIZE as u64)
-                .expect("Failed to set file length");
 
             register_file(fd);
 
             let dma_file = std::rc::Rc::new(DmaFile::new(file));
 
-            dma_file
-                .fallocate(TOTAL_SIZE as u64)
-                .await
-                .expect("fallocate failed");
-            // for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
-            //     let buffer = vec![0x61; BUFFER_SIZE];
-            //     let reactor = reactor.clone();
-            //     let handle = runtime.clone().spawn(WriteFileFuture::new(
-            //         fd,
-            //         buffer.clone(),
-            //         (i * BUFFER_SIZE) as u64,
-            //         reactor.clone(),
-            //     ));
-            //     handles.push(handle);
-            // }
+            let total_blocks = TOTAL_SIZE / BUFFER_SIZE;
 
             let now = std::time::Instant::now();
-            let mut inflight = 0usize;
+            // let mut completed = 0usize;
+            let mut next_block = 0usize;
             let mut handles = futures::stream::FuturesUnordered::new();
-            for i in 0..(TOTAL_SIZE / BUFFER_SIZE) {
+
+            // Initial submission: fill up to IODEPTH
+            while next_block < total_blocks && handles.len() < IODEPTH {
                 let file = dma_file.clone();
                 let buffer = file.acquire_buffer().await;
-                // tracing::debug!("fill buffer with 0x61");
-                let offset = (i * BUFFER_SIZE) as u64;
+                let offset = (next_block * BUFFER_SIZE) as u64;
                 let handle = pluvio_runtime::spawn_polling_with_name(
                     async move {
-                        // write_fixed now returns (bytes_written, buffer)
-                        file.write_fixed(buffer, offset)
+                        file.read_fixed(buffer, offset)
                             .await
                             .map(|(bytes, _buf)| bytes)
                     },
-                    format!("read_fixed_{}", i),
+                    format!("read_fixed_{}", next_block),
                 );
                 handles.push(handle);
-
-                inflight += 1;
+                next_block += 1;
             }
 
-            tracing::debug!("all tasks added to queue");
+            // Process completions and submit new requests to maintain IODEPTH
+            while let Some(_result) = handles.next().await {
+                // completed += 1;
 
-            futures::future::join_all(handles).await;
+                // Submit next block if available
+                if next_block < total_blocks {
+                    let file = dma_file.clone();
+                    let buffer = file.acquire_buffer().await;
+                    let offset = (next_block * BUFFER_SIZE) as u64;
+                    let handle = pluvio_runtime::spawn_polling_with_name(
+                        async move {
+                            file.read_fixed(buffer, offset)
+                                .await
+                                .map(|(bytes, _buf)| bytes)
+                        },
+                        format!("read_fixed_{}", next_block),
+                    );
+                    handles.push(handle);
+                    next_block += 1;
+                }
+            }
 
-            let longest_task_stats = runtime.get_longest_running_task().unwrap();
-            tracing::debug!(
-                "longest task time: {:?}s",
-                longest_task_stats
-                    .get_elapsed_real_time()
-                    .unwrap()
-                    .as_secs_f64()
-            );
-            tracing::debug!(
-                "execute time of all task: {}s",
-                Duration::from_nanos(runtime.get_total_time("")).as_secs_f64()
-            );
-            tracing::debug!(
-                "reactor poll time: {}s",
-                Duration::from_nanos(runtime.get_reactor_polling_time()).as_secs_f64()
-            );
-            tracing::info!("write done: {:?}", now.elapsed());
+            let elapsed = now.elapsed();
+            tracing::info!("read done: {:?}", elapsed);
             tracing::info!(
-                "bandwidth: {:?}MiB/s",
-                (TOTAL_SIZE / 1024 / 1024) as f64 / now.elapsed().as_secs_f64()
+                "bandwidth: {:.2} MiB/s ({:.2} GiB/s)",
+                (TOTAL_SIZE / 1024 / 1024) as f64 / elapsed.as_secs_f64(),
+                (TOTAL_SIZE as f64 / (1024.0 * 1024.0 * 1024.0)) / elapsed.as_secs_f64()
             );
             std::process::exit(0);
         });
+}
+
+#[async_backtrace::framed]
+async fn read_fixed(buffer: pluvio_uring::allocator::FixedBuffer, offset: u64, file: DmaFile) -> Result<(i32, pluvio_uring::allocator::FixedBuffer), std::io::Error> {
+    file.read_fixed(buffer, offset).await
+}
+
+#[async_backtrace::framed]
+async fn write_fixed(buffer: pluvio_uring::allocator::FixedBuffer, offset: u64, file: DmaFile) -> Result<(i32, pluvio_uring::allocator::FixedBuffer), std::io::Error> {
+    file.write_fixed(buffer, offset).await
 }

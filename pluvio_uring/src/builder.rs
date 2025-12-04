@@ -22,6 +22,7 @@ pub struct IoUringReactorBuilder {
     queue_size: u32,
     buffer_size: usize,
     submit_depth: u32,
+    sq_poll: Option<u32>,
     wait_submit_timeout: Duration,
     wait_complete_timeout: Duration,
 }
@@ -32,6 +33,7 @@ impl Default for IoUringReactorBuilder {
             queue_size: 1024,
             buffer_size: 4096,
             submit_depth: 64,
+            sq_poll: None,
             wait_submit_timeout: Duration::from_millis(50),
             wait_complete_timeout: Duration::from_millis(100),
         }
@@ -74,12 +76,26 @@ impl IoUringReactorBuilder {
         self
     }
 
+    /// Enable or disable SQPOLL mode.
+    pub fn sq_poll(mut self, sq_poll: u32) -> Self {
+        self.sq_poll = Some(sq_poll);
+        self
+    }
+
     /// Build the [`IoUringReactor`] from the configured parameters.
     pub fn build(self) -> Rc<IoUringReactor> {
-        let ring = IoUring::builder()
-            // .setup_iopoll()
-            .build(self.queue_size)
-            .expect("Failed to create io_uring");
+        let mut ring_builder = IoUring::builder();
+        let ring = if let Some(sq_poll) = self.sq_poll {
+            ring_builder
+                .setup_sqpoll(sq_poll) // No CPU affinity
+                .build(self.queue_size)
+                .expect("Failed to create io_uring with SQPOLL")
+        } else {
+            ring_builder
+                // .setup_iopoll()
+                .build(self.queue_size)
+                .expect("Failed to create io_uring")
+        };
         if ring.params().is_feature_nodrop() {
             tracing::trace!("io_uring supports IORING_FEAT_NODROP");
         } else {
@@ -104,6 +120,7 @@ impl IoUringReactorBuilder {
                 submit_depth: self.submit_depth,
                 wait_submit_timeout: self.wait_submit_timeout,
                 wait_complete_timeout: self.wait_complete_timeout,
+                sq_poll: self.sq_poll,
             },
             completed_count: Cell::new(0),
         });
