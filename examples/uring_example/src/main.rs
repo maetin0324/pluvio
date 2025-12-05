@@ -15,8 +15,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 static TOTAL_SIZE: usize = 16 << 30;
-static BUFFER_SIZE: usize = 1 << 20; // 1 MiB to match fio
-static IODEPTH: usize = 64; // Match fio's iodepth
+static BUFFER_SIZE: usize = 4 << 20; // 4 MiB to match fio
+static IODEPTH: usize = 256; // Match fio's iodepth
 
 // sigintの時にasync-backtraceをダンプして終了する
 // signal-handlerをlibc経由で登録
@@ -43,7 +43,7 @@ pub fn setup_signal_handlers() {
 fn main() {
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "Info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "debug".into()),
         )
         .with(tracing_subscriber::fmt::Layer::default().with_ansi(true))
         .init();
@@ -56,7 +56,7 @@ fn main() {
         .submit_depth(IODEPTH as u32) // Submit when we have iodepth entries
         .wait_submit_timeout(Duration::from_micros(0)) // Submit immediately
         .wait_complete_timeout(Duration::from_micros(0)) // Check completions immediately
-        .sq_poll(50) // Enable SQPOLL with no CPU affinity
+        // .sq_poll(50) // Enable SQPOLL with no CPU affinity
         .build();
 
     runtime.register_reactor("io_uring_reactor", reactor);
@@ -65,16 +65,23 @@ fn main() {
 
     setup_signal_handlers();
 
+    tracing::debug!("Before run_with_name");
+
     pluvio_runtime::run_with_name("uring_example_main", async move {
+            tracing::debug!("Inside async block");
             // Use fio's test file for read benchmark
             let file = File::options()
                 .read(true)
+                .write(true)
                 .custom_flags(libc::O_DIRECT)
                 .open("/local/rmaeda/fio_test.txt")
                 .expect("Failed to open file");
+            tracing::debug!("File opened");
             let fd = file.as_raw_fd();
 
+            tracing::debug!("Before register_file");
             register_file(fd);
+            tracing::debug!("After register_file");
 
             let dma_file = std::rc::Rc::new(DmaFile::new(file));
 
@@ -90,13 +97,13 @@ fn main() {
                 let file = dma_file.clone();
                 let buffer = file.acquire_buffer().await;
                 let offset = (next_block * BUFFER_SIZE) as u64;
-                let handle = pluvio_runtime::spawn_polling_with_name(
+                let handle = pluvio_runtime::spawn_with_name(
                     async move {
-                        file.read_fixed(buffer, offset)
+                        file.write_fixed(buffer, offset)
                             .await
                             .map(|(bytes, _buf)| bytes)
                     },
-                    format!("read_fixed_{}", next_block),
+                    format!("write_fixed_{}", next_block),
                 );
                 handles.push(handle);
                 next_block += 1;
