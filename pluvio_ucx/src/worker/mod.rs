@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, RefCell, UnsafeCell},
     collections::HashSet,
     io::IoSliceMut,
     mem::MaybeUninit,
@@ -28,7 +28,7 @@ pub struct Context {
 pub struct Worker {
     id: Cell<usize>,
     worker: Rc<async_ucx::ucp::Worker>,
-    state: Cell<WorkerState>,
+    state: UnsafeCell<WorkerState>,
     listener_ids: RefCell<HashSet<String>>,
     wait_connect_start: Cell<Option<std::time::Instant>>,
 }
@@ -70,7 +70,7 @@ impl Worker {
         let worker = Rc::new(Self {
             id: Cell::new(0),
             worker,
-            state: Cell::new(WorkerState::Inactive),
+            state: UnsafeCell::new(WorkerState::Inactive),
             listener_ids: RefCell::new(HashSet::new()),
             wait_connect_start: Cell::new(None),
         });
@@ -81,26 +81,34 @@ impl Worker {
 
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn state(&self) -> WorkerState {
-        self.state.get()
+        unsafe { *self.state.get() }
     }
 
     pub fn activate(&self) {
-        self.state.set(WorkerState::Active);
+        unsafe {
+            *self.state.get() = WorkerState::Active;
+        }
         self.wait_connect_start.set(None);
     }
 
     pub fn deactivate(&self) {
         if self.listener_ids.borrow().is_empty() {
-            self.state.set(WorkerState::Inactive);
+            unsafe {
+                *self.state.get() = WorkerState::Inactive;
+            }
             self.wait_connect_start.set(None);
         } else {
-            self.state.set(WorkerState::WaitConnect);
+            unsafe {
+                *self.state.get() = WorkerState::WaitConnect;
+            }
             self.wait_connect_start.set(Some(std::time::Instant::now()));
         }
     }
 
     pub fn wait_connect(&self) {
-        self.state.set(WorkerState::WaitConnect);
+        unsafe {
+            *self.state.get() = WorkerState::WaitConnect;
+        }
         self.wait_connect_start.set(Some(std::time::Instant::now()));
     }
 
