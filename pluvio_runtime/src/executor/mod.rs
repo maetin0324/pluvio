@@ -25,6 +25,27 @@ use crate::{
     task::{JoinHandle, Task, TaskTrait},
 };
 
+/// Configuration for runtime scheduling behavior.
+#[derive(Debug, Clone)]
+pub struct SchedulingConfig {
+    /// Maximum number of tasks to process per event loop iteration.
+    pub task_batch_size: usize,
+    /// Poll reactors every N iterations (e.g., 4 means poll every 4th iteration).
+    pub reactor_poll_interval: u32,
+    /// Cache reactor status() results for N iterations.
+    pub status_cache_iterations: u64,
+}
+
+impl Default for SchedulingConfig {
+    fn default() -> Self {
+        Self {
+            task_batch_size: 16,
+            reactor_poll_interval: 4,
+            status_cache_iterations: 50,
+        }
+    }
+}
+
 /// Internal wrapper used to keep state for a registered reactor.
 struct ReactorWrapper<R> {
     /// The reactor instance.
@@ -33,6 +54,10 @@ struct ReactorWrapper<R> {
     poll_counter: Cell<usize>,
     /// Whether this reactor is currently enabled.
     enable: Cell<bool>,
+    /// Cached reactor status to avoid repeated status() calls.
+    cached_status: Cell<ReactorStatus>,
+    /// Iteration number until which the cached status is valid.
+    cache_valid_until_iteration: Cell<u64>,
 }
 
 /// Asynchronous task runtime that manages reactors and tasks.
@@ -46,6 +71,10 @@ pub struct Runtime {
     stat: RuntimeStat,
     /// Flag to request graceful shutdown of the runtime
     shutdown_requested: Cell<bool>,
+    /// Configuration for scheduling behavior
+    scheduling_config: SchedulingConfig,
+    /// Current iteration count for adaptive polling
+    iteration_count: Cell<u64>,
 }
 
 // Thread-local storage for the runtime
@@ -58,7 +87,12 @@ impl Runtime {
     /// Creates a new runtime with an internal task queue of `queue_size`.
     #[tracing::instrument(level = "trace")]
     pub fn new(queue_size: u64) -> Rc<Self> {
-        // allocator.fill_buffers(0x61);
+        Self::with_config(queue_size, SchedulingConfig::default())
+    }
+
+    /// Creates a new runtime with custom scheduling configuration.
+    #[tracing::instrument(level = "trace")]
+    pub fn with_config(queue_size: u64, config: SchedulingConfig) -> Rc<Self> {
         let (task_sender, task_receiver) = unbounded();
         let (polling_task_sender, polling_task_receiver) = unbounded();
         let task_pool = Rc::new(RefCell::new(Slab::with_capacity(queue_size as usize)));
@@ -71,6 +105,8 @@ impl Runtime {
             task_pool,
             stat: RuntimeStat::new(),
             shutdown_requested: Cell::new(false),
+            scheduling_config: config,
+            iteration_count: Cell::new(0),
         })
     }
 
@@ -157,12 +193,11 @@ impl Runtime {
         T: 'static,
     {
         let (task, handle) =
-            Task::create_task_and_handle(future, self.task_sender.clone(), Some(task_name));
+            Task::create_task_and_handle(future, self.task_sender.clone(), Some(task_name.clone()));
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
         let task_id = task_pool.insert(task);
-        tracing::trace!("Runtime::spawn_with_name task_id: {}", task_id);
 
         // タスクをキューに送信
         self.task_sender.send(task_id).expect("Failed to send task");
@@ -204,15 +239,40 @@ impl Runtime {
             reactor: Rc::new(reactor) as Rc<dyn Reactor>,
             poll_counter: Cell::new(0),
             enable: Cell::new(true),
+            cached_status: Cell::new(ReactorStatus::Stopped),
+            cache_valid_until_iteration: Cell::new(0),
         };
         self.reactors.borrow_mut().insert(id, reactor_wrapper);
         tracing::debug!("Reactor {} registered", id);
     }
 
+    /// Get cached reactor status, refreshing if cache is expired.
+    #[inline]
+    fn get_cached_reactor_status(
+        &self,
+        wrapper: &ReactorWrapper<Rc<dyn Reactor>>,
+        current_iteration: u64,
+    ) -> ReactorStatus {
+        if current_iteration < wrapper.cache_valid_until_iteration.get() {
+            // Cache is still valid
+            return wrapper.cached_status.get();
+        }
+
+        // Cache expired, refresh status
+        let status = wrapper.reactor.status();
+        wrapper.cached_status.set(status);
+        wrapper.cache_valid_until_iteration.set(
+            current_iteration + self.scheduling_config.status_cache_iterations,
+        );
+        status
+    }
+
     /// Run tasks until the task pool becomes empty.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn run_queue(&self) {
-        let mut _nooped = 0;
+        let initial_task_count = self.task_pool.borrow().len();
+        tracing::debug!(initial_task_count, "run_queue: Starting");
+
         let mut stuck_counter: u64 = 0;
 
         // Read max stuck iterations from environment or use default
@@ -234,14 +294,41 @@ impl Runtime {
                 break;
             }
 
+            // Increment iteration counter
+            let iteration = self.iteration_count.get();
+            self.iteration_count.set(iteration + 1);
+
             let mut made_progress = false;
 
-            // IMPORTANT: Poll reactors FIRST to receive messages and wake tasks
-            // This ensures that when a message arrives, tasks are woken immediately
-            // and can be processed in the same iteration
-            for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
-                if reactor_wrapper.enable.get() {
-                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+            // === Polling Task Queue (process all available) ===
+            // yield_nowされたタスクが入ると無限ループしてしまうので
+            // 現時点でReceiverにあるタスクのみを処理
+            let mut polling_tasks = Vec::new();
+            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                polling_tasks.push(task_id);
+            }
+
+            // === Reactor Polling (interval-based with caching) ===
+            // Always poll reactors when we have pending polling tasks (they may be waiting for I/O)
+            // Or when iteration is 0 or 1 (initial iterations often have I/O operations)
+            // Otherwise poll every N iterations to reduce overhead
+            let has_pending_polling_tasks = !polling_tasks.is_empty();
+            let is_early_iteration = iteration <= 1;
+            let should_poll_reactors = has_pending_polling_tasks
+                || is_early_iteration
+                || (iteration % self.scheduling_config.reactor_poll_interval as u64 == 0);
+
+            if should_poll_reactors {
+                let reactors_ref = self.reactors.borrow();
+                for (_id, reactor_wrapper) in reactors_ref.iter() {
+                    if !reactor_wrapper.enable.get() {
+                        continue;
+                    }
+
+                    // Use cached status to avoid repeated expensive status() calls
+                    let status = self.get_cached_reactor_status(reactor_wrapper, iteration);
+
+                    if let ReactorStatus::Running = status {
                         reactor_wrapper.reactor.poll();
                         reactor_wrapper
                             .poll_counter
@@ -251,16 +338,9 @@ impl Runtime {
                 }
             }
 
-            // yield_nowされたタスクが入ると無限ループしてしまうので
-            // 現時点でReceiverにあるタスクのみを処理
-            // polling_task_receiverにあるタスクを一度に取り出して処理
-            let mut polling_tasks = Vec::new();
-            while let Ok(task) = self.polling_task_receiver.try_recv() {
-                polling_tasks.push(task);
-            }
+            // === Process Polling Tasks ===
             for task_id in polling_tasks {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
-                    // タスクが完了した場合、タスクを削除
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
@@ -269,15 +349,24 @@ impl Runtime {
                 }
             }
 
-            let task_id_slot = self.task_receiver.try_recv();
+            // === Normal Task Queue (batch processing) ===
+            // Process multiple tasks per iteration to improve throughput
+            let batch_size = self.scheduling_config.task_batch_size;
+            let mut tasks = Vec::with_capacity(batch_size);
 
-            if let Ok(task_id) = task_id_slot {
-                // タスクを取得してポーリング
+            for _ in 0..batch_size {
+                if let Ok(task_id) = self.task_receiver.try_recv() {
+                    tasks.push(task_id);
+                } else {
+                    break;
+                }
+            }
+
+            for task_id in tasks {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
                     self.stat.add_task_stat(task);
-
                     binding.remove(task_id);
                     made_progress = true;
                 }
@@ -422,12 +511,37 @@ impl Runtime {
                 }
             }
 
+            // Increment iteration counter
+            let iteration = self.iteration_count.get();
+            self.iteration_count.set(iteration + 1);
+
             let mut made_progress = false;
 
-            // Poll reactors to drive I/O
-            for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
-                if reactor_wrapper.enable.get() {
-                    if let ReactorStatus::Running = reactor_wrapper.reactor.status() {
+            // === Polling Task Queue (process all available) ===
+            let mut polling_tasks = Vec::new();
+            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                polling_tasks.push(task_id);
+            }
+
+            // === Reactor Polling (interval-based with caching) ===
+            // Always poll reactors when we have pending polling tasks (they may be waiting for I/O)
+            // Or when iteration is 0 or 1 (initial iterations often have I/O operations)
+            // Otherwise poll every N iterations to reduce overhead
+            let has_pending_polling_tasks = !polling_tasks.is_empty();
+            let is_early_iteration = iteration <= 1;
+            let should_poll_reactors = has_pending_polling_tasks
+                || is_early_iteration
+                || (iteration % self.scheduling_config.reactor_poll_interval as u64 == 0);
+
+            if should_poll_reactors {
+                for (_id, reactor_wrapper) in self.reactors.borrow().iter() {
+                    if !reactor_wrapper.enable.get() {
+                        continue;
+                    }
+
+                    let status = self.get_cached_reactor_status(reactor_wrapper, iteration);
+
+                    if let ReactorStatus::Running = status {
                         reactor_wrapper.reactor.poll();
                         reactor_wrapper
                             .poll_counter
@@ -437,11 +551,7 @@ impl Runtime {
                 }
             }
 
-            // Process polling queue tasks
-            let mut polling_tasks = Vec::new();
-            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
-                polling_tasks.push(task_id);
-            }
+            // === Process Polling Tasks ===
             for task_id in polling_tasks {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
@@ -452,8 +562,19 @@ impl Runtime {
                 }
             }
 
-            // Process regular queue tasks
-            if let Ok(task_id) = self.task_receiver.try_recv() {
+            // === Normal Task Queue (batch processing) ===
+            let batch_size = self.scheduling_config.task_batch_size;
+            let mut tasks = Vec::with_capacity(batch_size);
+
+            for _ in 0..batch_size {
+                if let Ok(task_id) = self.task_receiver.try_recv() {
+                    tasks.push(task_id);
+                } else {
+                    break;
+                }
+            }
+
+            for task_id in tasks {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -515,8 +636,11 @@ impl Runtime {
         T: 'static,
         S: Into<String> + std::fmt::Debug,
     {
+        tracing::debug!("run_with_name_and_runtime: Starting");
         self.spawn_with_name_and_runtime(future, task_name.into());
+        tracing::debug!("run_with_name_and_runtime: Spawned task, starting run_queue");
         self.run_queue();
+        tracing::debug!("run_with_name_and_runtime: Completed");
     }
 
     /// Poll a single task by its id.
