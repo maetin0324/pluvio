@@ -32,6 +32,19 @@ impl Future for LazyAcquire {
             Poll::Ready(buffer)
         } else {
             // If no buffer is available, register the waker and return Pending.
+            // Log buffer exhaustion for performance diagnostics
+            let (total, free, waiting) = {
+                let buffers = this.allocator.buffers.borrow();
+                let queue = this.allocator.acquire_queue.borrow();
+                (buffers.capacity(), buffers.len(), queue.len())
+            };
+            tracing::debug!(
+                total_buffers = total,
+                free_buffers = free,
+                waiting_tasks = waiting,
+                "Buffer pool exhausted, task waiting for buffer"
+            );
+
             let state_clone = Rc::clone(&this.state);
             {
                 this.state.borrow_mut().waker = Some(cx.waker().clone());
@@ -123,12 +136,27 @@ impl FixedBufferAllocator {
     /// Try to acquire a buffer without waiting.
     fn acquire_inner(self: &Rc<Self>) -> Option<FixedBuffer> {
         let mut buffers = self.buffers.borrow_mut();
+        let total = buffers.capacity();
         buffers.pop().map(|fixed_buf| {
-            let buffer = FixedBuffer {
+            let free_after = buffers.len();
+            let used = total - free_after;
+            let utilization = if total > 0 {
+                (used as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            // Log buffer utilization at trace level for detailed analysis
+            tracing::trace!(
+                total_buffers = total,
+                free_buffers = free_after,
+                used_buffers = used,
+                utilization_pct = %format!("{:.1}", utilization),
+                "Buffer acquired"
+            );
+            FixedBuffer {
                 buffer: Some(fixed_buf),
                 allocator: Rc::clone(self),
-            };
-            buffer
+            }
         })
     }
 

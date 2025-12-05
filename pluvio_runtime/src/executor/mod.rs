@@ -40,8 +40,14 @@ impl Default for SchedulingConfig {
     fn default() -> Self {
         Self {
             task_batch_size: 16,
-            reactor_poll_interval: 4,
-            status_cache_iterations: 50,
+            // Increased from 4 to 8 to reduce polling overhead.
+            // With atomic status() checks (Phase 2/3 optimizations),
+            // we can afford to poll less frequently.
+            reactor_poll_interval: 8,
+            // Increased from 50 to 100 iterations.
+            // Now that status() uses atomic counters, caching is less critical
+            // but still helps reduce any remaining overhead.
+            status_cache_iterations: 100,
         }
     }
 }
