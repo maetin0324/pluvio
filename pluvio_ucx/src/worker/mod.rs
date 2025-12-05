@@ -30,7 +30,7 @@ pub struct Worker {
     worker: Rc<async_ucx::ucp::Worker>,
     state: UnsafeCell<WorkerState>,
     listener_ids: RefCell<HashSet<String>>,
-    wait_connect_start: Cell<Option<std::time::Instant>>,
+    wait_connect_start: UnsafeCell<Option<std::time::Instant>>,
 }
 
 pub type WorkerAddressInner = async_ucx::ucp::WorkerAddressInner;
@@ -72,7 +72,7 @@ impl Worker {
             worker,
             state: UnsafeCell::new(WorkerState::Inactive),
             listener_ids: RefCell::new(HashSet::new()),
-            wait_connect_start: Cell::new(None),
+            wait_connect_start: UnsafeCell::new(None),
         });
         let id = UCXReactor::current().register_worker(worker.clone());
         worker.id.set(id);
@@ -88,7 +88,9 @@ impl Worker {
         unsafe {
             *self.state.get() = WorkerState::Active;
         }
-        self.wait_connect_start.set(None);
+        unsafe {
+            self.wait_connect_start.get().as_mut().take();
+        }
     }
 
     pub fn deactivate(&self) {
@@ -96,12 +98,16 @@ impl Worker {
             unsafe {
                 *self.state.get() = WorkerState::Inactive;
             }
-            self.wait_connect_start.set(None);
+            unsafe {
+                self.wait_connect_start.get().as_mut().take();
+            }
         } else {
             unsafe {
                 *self.state.get() = WorkerState::WaitConnect;
             }
-            self.wait_connect_start.set(Some(std::time::Instant::now()));
+            unsafe {
+                *self.wait_connect_start.get() = Some(std::time::Instant::now());
+            }
         }
     }
 
@@ -109,11 +115,13 @@ impl Worker {
         unsafe {
             *self.state.get() = WorkerState::WaitConnect;
         }
-        self.wait_connect_start.set(Some(std::time::Instant::now()));
+        unsafe {
+            *self.wait_connect_start.get() = Some(std::time::Instant::now());
+        }
     }
 
     pub fn wait_start_time(&self) -> Option<std::time::Instant> {
-        self.wait_connect_start.get()
+        unsafe { *self.wait_connect_start.get() }
     }
 
     pub fn inner(&self) -> &async_ucx::ucp::Worker {

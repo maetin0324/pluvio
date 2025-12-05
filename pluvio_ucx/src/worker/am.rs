@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use tracing::instrument;
+
 use crate::worker::{endpoint::Endpoint, Worker};
 
 pub type AmStreamInner = async_ucx::ucp::AmStream;
@@ -12,6 +14,7 @@ pub struct AmStream {
 }
 
 impl Worker {
+    #[instrument(level = "trace", skip(self))]
     pub fn am_stream(self: &Rc<Self>, id: u16) -> Result<AmStream, async_ucx::Error> {
         let res = self.worker.am_stream(id);
 
@@ -30,6 +33,7 @@ impl Worker {
 }
 
 impl Endpoint {
+    #[instrument(level = "trace", skip(self, header, data))]
     #[async_backtrace::framed]
     pub async fn am_send(
         &self,
@@ -49,6 +53,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, header, iov))]
     #[async_backtrace::framed]
     pub async fn am_send_vectorized(
         &self,
@@ -70,6 +75,7 @@ impl Endpoint {
 }
 
 impl AmStream {
+    #[instrument(level = "trace", skip(self))]
     #[async_backtrace::framed]
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
         self.worker.wait_connect();

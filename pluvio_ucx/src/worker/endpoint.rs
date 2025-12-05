@@ -1,5 +1,6 @@
 use crate::worker::Worker;
 use std::{mem::MaybeUninit, rc::Rc};
+use tracing::instrument;
 
 pub struct Endpoint {
     pub endpoint: async_ucx::ucp::Endpoint,
@@ -7,6 +8,7 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    #[instrument(level = "trace", skip(self, buf, rkey))]
     #[async_backtrace::framed]
     pub async fn put(
         &self,
@@ -20,6 +22,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, buf, rkey))]
     #[async_backtrace::framed]
     pub async fn get(
         &self,
@@ -33,6 +36,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, buf))]
     #[async_backtrace::framed]
     pub async fn stream_send(&self, buf: &[u8]) -> Result<usize, async_ucx::Error> {
         self.worker.activate();
@@ -41,6 +45,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, buf))]
     #[async_backtrace::framed]
     pub async fn stream_recv(
         &self,
@@ -52,6 +57,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, buf))]
     #[async_backtrace::framed]
     pub async fn tag_send(&self, tag: u64, buf: &[u8]) -> Result<usize, async_ucx::Error> {
         self.worker.activate();
@@ -60,6 +66,7 @@ impl Endpoint {
         ret
     }
 
+    #[instrument(level = "trace", skip(self, iov))]
     #[async_backtrace::framed]
     pub async fn tag_send_vectored(
         &self,
@@ -84,11 +91,13 @@ impl Endpoint {
         self.endpoint.print_to_stderr();
     }
 
+    #[instrument(level = "trace", skip(self))]
     #[async_backtrace::framed]
     pub async fn flush(&self) -> Result<(), async_ucx::Error> {
         self.endpoint.flush().await
     }
 
+    #[instrument(level = "trace", skip(self))]
     #[async_backtrace::framed]
     pub async fn close(&self, force: bool) -> Result<(), async_ucx::Error> {
         self.endpoint.close(force).await
