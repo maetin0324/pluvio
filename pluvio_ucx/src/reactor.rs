@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use std::{cell::RefCell, rc::Rc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use slab::Slab;
 
@@ -14,6 +15,9 @@ pub struct UCXReactor {
     registered_workers: RefCell<Slab<Rc<Worker>>>,
     last_polled: RefCell<std::time::Instant>,
     connection_timeout: std::time::Duration,
+    /// Atomic counter for active/waiting workers to avoid iteration in status()
+    /// This is called very frequently (313K+ times in benchmarks)
+    active_or_waiting_count: AtomicUsize,
 }
 
 impl UCXReactor {
@@ -29,6 +33,7 @@ impl UCXReactor {
             registered_workers: RefCell::new(Slab::new()),
             last_polled: RefCell::new(std::time::Instant::now()),
             connection_timeout: std::time::Duration::from_secs(timeout_secs),
+            active_or_waiting_count: AtomicUsize::new(0),
         }
     }
 
@@ -46,26 +51,30 @@ impl UCXReactor {
     pub fn unregister_worker(&self, id: usize) {
         self.registered_workers.borrow_mut().remove(id);
     }
+
+    /// Increment the active/waiting worker count.
+    /// Called when a worker transitions to Active or WaitConnect state.
+    pub fn increment_active_count(&self) {
+        self.active_or_waiting_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement the active/waiting worker count.
+    /// Called when a worker transitions from Active or WaitConnect to Inactive.
+    pub fn decrement_active_count(&self) {
+        self.active_or_waiting_count.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl pluvio_runtime::reactor::Reactor for UCXReactor {
     fn status(&self) -> ReactorStatus {
-        let workers = self.registered_workers.borrow();
-
-        for (_, worker) in workers.iter() {
-            match worker.state() {
-                crate::worker::WorkerState::Active => {
-                    return ReactorStatus::Running;
-                }
-                crate::worker::WorkerState::WaitConnect => {
-                    // WaitConnect state during AM stream message waiting is a normal state.
-                    // Treat it as Running to prevent spurious "Runtime stuck" errors.
-                    return ReactorStatus::Running;
-                }
-                crate::worker::WorkerState::Inactive => {}
-            }
+        // Use atomic counter to avoid RefCell borrow and worker iteration overhead.
+        // This method is called very frequently (313K+ times in benchmarks),
+        // so avoiding the RefCell borrow and iteration is critical for performance.
+        if self.active_or_waiting_count.load(Ordering::Relaxed) > 0 {
+            ReactorStatus::Running
+        } else {
+            ReactorStatus::Stopped
         }
-        ReactorStatus::Stopped
     }
 
     fn poll(&self) {

@@ -53,9 +53,17 @@ pub mod executor;
 pub mod reactor;
 /// Task abstraction and waker utilities.
 pub mod task;
+/// Track ID management for Perfetto trace visualization.
+pub mod track;
 
 // Re-export TLS-based convenience functions at the crate root for easier access
 pub use executor::{
     clear_runtime, get_runtime, run, run_with_name, set_runtime, spawn, spawn_polling,
     spawn_polling_with_name, spawn_with_name,
+};
+
+// Re-export track ID management functions
+pub use track::{
+    acquire_track_id, get_current_track_id, maybe_tracked, release_track_id, set_current_track_id,
+    tracked, MaybeTracked, TrackedFuture,
 };

@@ -85,21 +85,31 @@ impl Worker {
     }
 
     pub fn activate(&self) {
+        let old_state = self.state();
         unsafe {
             *self.state.get() = WorkerState::Active;
         }
         unsafe {
             self.wait_connect_start.get().as_mut().take();
         }
+        // Increment counter only when transitioning from Inactive
+        if old_state == WorkerState::Inactive {
+            UCXReactor::current().increment_active_count();
+        }
     }
 
     pub fn deactivate(&self) {
+        let old_state = self.state();
         if self.listener_ids.borrow().is_empty() {
             unsafe {
                 *self.state.get() = WorkerState::Inactive;
             }
             unsafe {
                 self.wait_connect_start.get().as_mut().take();
+            }
+            // Decrement counter when transitioning from Active/WaitConnect to Inactive
+            if old_state != WorkerState::Inactive {
+                UCXReactor::current().decrement_active_count();
             }
         } else {
             unsafe {
@@ -108,15 +118,21 @@ impl Worker {
             unsafe {
                 *self.wait_connect_start.get() = Some(std::time::Instant::now());
             }
+            // No counter change: Active -> WaitConnect (both counted)
         }
     }
 
     pub fn wait_connect(&self) {
+        let old_state = self.state();
         unsafe {
             *self.state.get() = WorkerState::WaitConnect;
         }
         unsafe {
             *self.wait_connect_start.get() = Some(std::time::Instant::now());
+        }
+        // Increment counter only when transitioning from Inactive
+        if old_state == WorkerState::Inactive {
+            UCXReactor::current().increment_active_count();
         }
     }
 

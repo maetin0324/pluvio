@@ -20,7 +20,7 @@ use pluvio_runtime::reactor::{Reactor, ReactorStatus};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::task::Waker;
 use std::time::{Duration, Instant};
 
@@ -102,12 +102,16 @@ pub struct TimerReactor {
     /// Timers indexed by handle for ordered expiration checking
     /// Using BTreeMap ensures timers are sorted by deadline
     timers: RefCell<BTreeMap<TimerHandle, Waker>>,
+    /// Atomic counter for timer count to avoid RefCell borrow in status()
+    /// This is updated on timer registration/cancellation/expiration
+    timer_count_atomic: AtomicUsize,
 }
 
 impl Default for TimerReactor {
     fn default() -> Self {
         Self {
             timers: RefCell::new(BTreeMap::new()),
+            timer_count_atomic: AtomicUsize::new(0),
         }
     }
 }
@@ -131,6 +135,7 @@ impl TimerReactor {
     pub fn register_timer(&self, deadline: Instant, waker: Waker) -> TimerHandle {
         let handle = TimerHandle::new(deadline);
         self.timers.borrow_mut().insert(handle, waker);
+        self.timer_count_atomic.fetch_add(1, Ordering::Relaxed);
         tracing::debug!(
             "TimerReactor: registered timer {:?} with deadline in {:?}",
             handle,
@@ -144,7 +149,11 @@ impl TimerReactor {
     /// Returns true if the timer was found and canceled, false otherwise
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn cancel_timer(&self, handle: TimerHandle) -> bool {
-        self.timers.borrow_mut().remove(&handle).is_some()
+        let removed = self.timers.borrow_mut().remove(&handle).is_some();
+        if removed {
+            self.timer_count_atomic.fetch_sub(1, Ordering::Relaxed);
+        }
+        removed
     }
 
     /// Get the number of pending timers
@@ -180,6 +189,7 @@ impl TimerReactor {
         // Wake and remove expired timers
         for handle in expired {
             if let Some(waker) = timers.remove(&handle) {
+                self.timer_count_atomic.fetch_sub(1, Ordering::Relaxed);
                 tracing::debug!("TimerReactor: waking timer {:?}", handle);
                 waker.wake();
             }
@@ -199,14 +209,13 @@ impl Reactor for TimerReactor {
     }
 
     fn status(&self) -> ReactorStatus {
-        let timer_count = self.timer_count();
-        let status = if timer_count > 0 {
+        // Use atomic counter to avoid RefCell borrow overhead
+        // This is called very frequently (313K+ times in benchmarks)
+        if self.timer_count_atomic.load(Ordering::Relaxed) > 0 {
             ReactorStatus::Running
         } else {
             ReactorStatus::Stopped
-        };
-
-        status
+        }
     }
 }
 
