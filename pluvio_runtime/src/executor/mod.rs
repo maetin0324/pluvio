@@ -34,6 +34,10 @@ pub struct SchedulingConfig {
     pub reactor_poll_interval: u32,
     /// Cache reactor status() results for N iterations.
     pub status_cache_iterations: u64,
+    /// Enable Perfetto track ID management for task-level trace separation.
+    /// When enabled, each spawned task will be assigned a unique track ID,
+    /// making it appear on a separate track in the Perfetto UI.
+    pub enable_perfetto_tracks: bool,
 }
 
 impl Default for SchedulingConfig {
@@ -48,6 +52,8 @@ impl Default for SchedulingConfig {
             // Now that status() uses atomic counters, caching is less critical
             // but still helps reduce any remaining overhead.
             status_cache_iterations: 100,
+            // Disabled by default, enable when using Perfetto tracing
+            enable_perfetto_tracks: false,
         }
     }
 }
@@ -147,13 +153,20 @@ impl Runtime {
 
     /// Spawn a future onto the runtime and return a [`JoinHandle`] to await
     /// its result. This version explicitly takes a runtime reference.
+    ///
+    /// If `enable_perfetto_tracks` is enabled in the scheduling config, the future
+    /// will be wrapped with track ID management for Perfetto trace visualization.
     #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        let (task, handle) = Task::create_task_and_handle(future, self.task_sender.clone(), None);
+        let wrapped = crate::track::maybe_tracked(
+            future,
+            self.scheduling_config.enable_perfetto_tracks,
+        );
+        let (task, handle) = Task::create_task_and_handle(wrapped, self.task_sender.clone(), None);
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
@@ -168,14 +181,21 @@ impl Runtime {
 
     /// Spawn a task that will be polled in a dedicated polling queue.
     /// This version explicitly takes a runtime reference.
+    ///
+    /// If `enable_perfetto_tracks` is enabled in the scheduling config, the future
+    /// will be wrapped with track ID management for Perfetto trace visualization.
     #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_polling_with_runtime<F, T>(&self, future: F) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
     {
+        let wrapped = crate::track::maybe_tracked(
+            future,
+            self.scheduling_config.enable_perfetto_tracks,
+        );
         let (task, handle) =
-            Task::create_task_and_handle(future, self.polling_task_sender.clone(), None);
+            Task::create_task_and_handle(wrapped, self.polling_task_sender.clone(), None);
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
@@ -192,14 +212,21 @@ impl Runtime {
 
     /// Spawn a task and associate a name with it for statistics.
     /// This version explicitly takes a runtime reference.
+    ///
+    /// If `enable_perfetto_tracks` is enabled in the scheduling config, the future
+    /// will be wrapped with track ID management for Perfetto trace visualization.
     #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
     {
+        let wrapped = crate::track::maybe_tracked(
+            future,
+            self.scheduling_config.enable_perfetto_tracks,
+        );
         let (task, handle) =
-            Task::create_task_and_handle(future, self.task_sender.clone(), Some(task_name.clone()));
+            Task::create_task_and_handle(wrapped, self.task_sender.clone(), Some(task_name.clone()));
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
@@ -213,14 +240,21 @@ impl Runtime {
 
     /// Spawn a task to the polling queue with a specific name for
     /// statistics purposes. This version explicitly takes a runtime reference.
+    ///
+    /// If `enable_perfetto_tracks` is enabled in the scheduling config, the future
+    /// will be wrapped with track ID management for Perfetto trace visualization.
     #[tracing::instrument(level = "trace", skip(self, future))]
     pub fn spawn_polling_with_name_and_runtime<F, T>(&self, future: F, task_name: String) -> JoinHandle<T>
     where
         F: Future<Output = T> + 'static,
         T: 'static,
     {
+        let wrapped = crate::track::maybe_tracked(
+            future,
+            self.scheduling_config.enable_perfetto_tracks,
+        );
         let (task, handle) =
-            Task::create_task_and_handle(future, self.polling_task_sender.clone(), Some(task_name));
+            Task::create_task_and_handle(wrapped, self.polling_task_sender.clone(), Some(task_name));
 
         // タスクをスレッドプールに追加
         let mut task_pool = self.task_pool.borrow_mut();
