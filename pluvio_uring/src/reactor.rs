@@ -135,25 +135,30 @@ impl IoUringReactor {
     }
 
     /// Submit all pending SQEs and process completions.
+    ///
+    /// Optimized to skip unnecessary syscalls:
+    /// - Only calls submit() when there are pending SQEs
+    /// - Early exits if no work to do
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn poll_submit_and_completions(&self) {
         let mut ring = self.ring.borrow_mut();
 
+        // Check if there are pending SQEs to submit
+        let has_pending_sqes = !ring.submission().is_empty();
+
         if let Some(_) = self.io_uring_params.sq_poll {
             // SQPOLLモードの場合、submitは不要
             // SQEの送信はスキップ
-        } else {
-            // SQE の送信
+        } else if has_pending_sqes {
+            // Only submit if there are pending SQEs (avoid unnecessary syscall)
             ring.submit().expect("Failed to submit SQE");
         }
 
-        // SQE の送信
-        // ring.submit().expect("Failed to submit SQE");
-        // ring.submit_and_wait(submission_len / 2).expect("Failed to submit SQE");
-        // ring.submit_and_wait(submission_len).expect("Failed to submit SQE");
-
-        let mut last = self.last_submit_time.borrow_mut();
-        *last = std::time::Instant::now();
+        // Update last submit time only if we actually had work
+        if has_pending_sqes {
+            let mut last = self.last_submit_time.borrow_mut();
+            *last = std::time::Instant::now();
+        }
 
         // CQの処理
 
