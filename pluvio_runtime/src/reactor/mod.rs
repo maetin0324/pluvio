@@ -8,8 +8,12 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Current running state of a reactor.
 pub enum ReactorStatus {
+    /// Reactor is actively processing
     Running,
+    /// Reactor has no pending work
     Stopped,
+    /// Reactor requires exclusive access (other reactors should NOT be polled)
+    Blocking,
 }
 
 /// Common interface for reactor implementations.

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use std::{cell::RefCell, rc::Rc};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::{RefCell, UnsafeCell};
+use std::rc::Rc;
 
 use slab::Slab;
 
@@ -15,15 +15,30 @@ pub struct UCXReactor {
     registered_workers: RefCell<Slab<Rc<Worker>>>,
     last_polled: RefCell<std::time::Instant>,
     connection_timeout: std::time::Duration,
-    /// Atomic counter for active/waiting workers to avoid iteration in status()
+    /// Counter for active/waiting workers to avoid iteration in status()
     /// This is called very frequently (313K+ times in benchmarks)
-    active_or_waiting_count: AtomicUsize,
+    active_or_waiting_count: UnsafeCell<usize>,
+    /// Rndv operation counter for blocking mode
+    rndv_count: UnsafeCell<usize>,
+    /// Threshold for triggering blocking mode
+    rndv_blocking_threshold: usize,
+    /// Start time of first Rndv operation (for timeout-based blocking)
+    rndv_start_time: UnsafeCell<Option<std::time::Instant>>,
+    /// Timeout before triggering blocking mode
+    rndv_blocking_timeout: std::time::Duration,
 }
 
 impl UCXReactor {
     #[tracing::instrument(level = "trace")]
     pub fn new() -> Self {
-        // Read timeout from environment variable or use default of 30 seconds
+        Self::with_rndv_config(
+            Self::default_rndv_threshold(),
+            Self::default_rndv_timeout(),
+        )
+    }
+
+    pub fn with_rndv_config(threshold: usize, timeout: std::time::Duration) -> Self {
+        // Read connection timeout from environment variable or use default of 30 seconds
         let timeout_secs = std::env::var("PLUVIO_CONNECTION_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -33,8 +48,27 @@ impl UCXReactor {
             registered_workers: RefCell::new(Slab::new()),
             last_polled: RefCell::new(std::time::Instant::now()),
             connection_timeout: std::time::Duration::from_secs(timeout_secs),
-            active_or_waiting_count: AtomicUsize::new(0),
+            active_or_waiting_count: UnsafeCell::new(0),
+            rndv_count: UnsafeCell::new(0),
+            rndv_blocking_threshold: threshold,
+            rndv_start_time: UnsafeCell::new(None),
+            rndv_blocking_timeout: timeout,
         }
+    }
+
+    fn default_rndv_threshold() -> usize {
+        std::env::var("PLUVIO_RNDV_BLOCKING_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32)
+    }
+
+    fn default_rndv_timeout() -> std::time::Duration {
+        let ms = std::env::var("PLUVIO_RNDV_BLOCKING_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+        std::time::Duration::from_millis(ms)
     }
 
     #[tracing::instrument(level = "trace")]
@@ -55,22 +89,87 @@ impl UCXReactor {
     /// Increment the active/waiting worker count.
     /// Called when a worker transitions to Active or WaitConnect state.
     pub fn increment_active_count(&self) {
-        self.active_or_waiting_count.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        unsafe {
+            *self.active_or_waiting_count.get() += 1;
+        }
     }
 
     /// Decrement the active/waiting worker count.
     /// Called when a worker transitions from Active or WaitConnect to Inactive.
     pub fn decrement_active_count(&self) {
-        self.active_or_waiting_count.fetch_sub(1, Ordering::Relaxed);
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        unsafe {
+            *self.active_or_waiting_count.get() -= 1;
+        }
+    }
+
+    /// Increment the Rndv operation count.
+    /// Called when a Rndv send or receive operation starts.
+    pub fn increment_rndv_count(&self) {
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        unsafe {
+            let count = self.rndv_count.get();
+            let prev = *count;
+            *count = prev + 1;
+            if prev == 0 {
+                *self.rndv_start_time.get() = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    /// Decrement the Rndv operation count.
+    /// Called when a Rndv send or receive operation completes.
+    pub fn decrement_rndv_count(&self) {
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        unsafe {
+            let count = self.rndv_count.get();
+            let prev = *count;
+            *count = prev - 1;
+            if prev == 1 {
+                *self.rndv_start_time.get() = None;
+            }
+        }
+    }
+
+    /// Check if the reactor should enter blocking mode.
+    fn should_block(&self) -> bool {
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        unsafe {
+            let count = *self.rndv_count.get();
+            if count == 0 {
+                return false;
+            }
+
+            // Block if count exceeds threshold
+            if count >= self.rndv_blocking_threshold {
+                return true;
+            }
+
+            // Block if timeout has elapsed since first Rndv operation
+            if let Some(start) = *self.rndv_start_time.get() {
+                if start.elapsed() >= self.rndv_blocking_timeout {
+                    return true;
+                }
+            }
+
+            false
+        }
     }
 }
 
 impl pluvio_runtime::reactor::Reactor for UCXReactor {
     fn status(&self) -> ReactorStatus {
-        // Use atomic counter to avoid RefCell borrow and worker iteration overhead.
+        // Check for blocking mode first (Rndv operations in progress)
+        if self.should_block() {
+            return ReactorStatus::Blocking;
+        }
+
+        // Use UnsafeCell counter to avoid RefCell borrow and worker iteration overhead.
         // This method is called very frequently (313K+ times in benchmarks),
         // so avoiding the RefCell borrow and iteration is critical for performance.
-        if self.active_or_waiting_count.load(Ordering::Relaxed) > 0 {
+        // SAFETY: Single-threaded access via thread_local UCXReactor
+        if unsafe { *self.active_or_waiting_count.get() } > 0 {
             ReactorStatus::Running
         } else {
             ReactorStatus::Stopped

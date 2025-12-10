@@ -301,9 +301,16 @@ impl Runtime {
         // Cache expired, refresh status
         let status = wrapper.reactor.status();
         wrapper.cached_status.set(status);
-        wrapper.cache_valid_until_iteration.set(
-            current_iteration + self.scheduling_config.status_cache_iterations,
-        );
+
+        // Use shorter cache duration for Blocking status to react quickly
+        let cache_duration = if status == ReactorStatus::Blocking {
+            1 // Re-evaluate next iteration
+        } else {
+            self.scheduling_config.status_cache_iterations
+        };
+        wrapper
+            .cache_valid_until_iteration
+            .set(current_iteration + cache_duration);
         status
     }
 
@@ -358,6 +365,46 @@ impl Runtime {
                 || is_early_iteration
                 || (iteration % self.scheduling_config.reactor_poll_interval as u64 == 0);
 
+            // === Check for Blocking reactor first ===
+            let is_blocking = {
+                let reactors_ref = self.reactors.borrow();
+                let mut blocking = false;
+                for (_id, reactor_wrapper) in reactors_ref.iter() {
+                    if !reactor_wrapper.enable.get() {
+                        continue;
+                    }
+                    let status = self.get_cached_reactor_status(reactor_wrapper, iteration);
+                    if status == ReactorStatus::Blocking {
+                        blocking = true;
+                        break;
+                    }
+                }
+                blocking
+            };
+
+            if is_blocking {
+                // === Blocking Mode: Only poll the blocking reactor, skip all task processing ===
+                let reactors_ref = self.reactors.borrow();
+                for (_id, reactor_wrapper) in reactors_ref.iter() {
+                    if !reactor_wrapper.enable.get() {
+                        continue;
+                    }
+                    let status = self.get_cached_reactor_status(reactor_wrapper, iteration);
+                    if status == ReactorStatus::Blocking {
+                        reactor_wrapper.reactor.poll();
+                        reactor_wrapper
+                            .poll_counter
+                            .set(reactor_wrapper.poll_counter.get() + 1);
+                        made_progress = true;
+                        // Only poll the blocking reactor
+                        break;
+                    }
+                }
+                // Skip task processing in blocking mode - continue to next iteration
+                continue;
+            }
+
+            // === Normal Mode: Poll all reactors and process tasks ===
             if should_poll_reactors {
                 let reactors_ref = self.reactors.borrow();
                 for (_id, reactor_wrapper) in reactors_ref.iter() {
@@ -368,7 +415,7 @@ impl Runtime {
                     // Use cached status to avoid repeated expensive status() calls
                     let status = self.get_cached_reactor_status(reactor_wrapper, iteration);
 
-                    if let ReactorStatus::Running = status {
+                    if status == ReactorStatus::Running {
                         reactor_wrapper.reactor.poll();
                         reactor_wrapper
                             .poll_counter
