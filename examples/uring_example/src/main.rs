@@ -18,27 +18,6 @@ static TOTAL_SIZE: usize = 16 << 30;
 static BUFFER_SIZE: usize = 4 << 20; // 4 MiB to match fio
 static IODEPTH: usize = 256; // Match fio's iodepth
 
-// sigintの時にasync-backtraceをダンプして終了する
-// signal-handlerをlibc経由で登録
-pub fn setup_signal_handlers() {
-    // Setup SIGINT (Ctrl+C), SIGTERM, and SIGUSR1 handlers
-    #[cfg(unix)]
-    {
-        use libc::SIGINT;
-        unsafe {
-            libc::signal(SIGINT, taskdump_signal_handler as libc::sighandler_t);
-        }
-    }
-
-    #[cfg(unix)]
-    extern "C" fn taskdump_signal_handler(_: libc::c_int) {
-        eprintln!("\nReceived SIGINT, dumping async task backtraces...");
-        async_backtrace::taskdump_tree(true);
-        std::process::exit(1);
-    }
-}
-
-
 /// Entry point of the example application.
 fn main() {
     tracing_subscriber::registry()
@@ -62,8 +41,6 @@ fn main() {
     runtime.register_reactor("io_uring_reactor", reactor);
 
     set_runtime(runtime.clone());
-
-    setup_signal_handlers();
 
     tracing::debug!("Before run_with_name");
 
