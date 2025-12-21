@@ -87,6 +87,10 @@ pub struct Runtime {
     scheduling_config: SchedulingConfig,
     /// Current iteration count for adaptive polling
     iteration_count: Cell<u64>,
+    /// Reusable buffer for polling tasks to avoid repeated heap allocations
+    polling_task_buffer: RefCell<Vec<usize>>,
+    /// Reusable buffer for normal tasks to avoid repeated heap allocations
+    task_buffer: RefCell<Vec<usize>>,
 }
 
 // Thread-local storage for the runtime
@@ -117,8 +121,10 @@ impl Runtime {
             task_pool,
             stat: RuntimeStat::new(),
             shutdown_requested: Cell::new(false),
-            scheduling_config: config,
+            scheduling_config: config.clone(),
             iteration_count: Cell::new(0),
+            polling_task_buffer: RefCell::new(Vec::with_capacity(64)),
+            task_buffer: RefCell::new(Vec::with_capacity(config.task_batch_size)),
         })
     }
 
@@ -343,16 +349,20 @@ impl Runtime {
             // === Polling Task Queue (process all available) ===
             // yield_nowされたタスクが入ると無限ループしてしまうので
             // 現時点でReceiverにあるタスクのみを処理
-            let mut polling_tasks = Vec::new();
-            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
-                polling_tasks.push(task_id);
+            // Use reusable buffer to avoid heap allocation on every iteration
+            {
+                let mut polling_tasks = self.polling_task_buffer.borrow_mut();
+                polling_tasks.clear();
+                while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                    polling_tasks.push(task_id);
+                }
             }
 
             // === Reactor Polling (interval-based with caching) ===
             // Always poll reactors when we have pending polling tasks (they may be waiting for I/O)
             // Or when iteration is 0 or 1 (initial iterations often have I/O operations)
             // Otherwise poll every N iterations to reduce overhead
-            let has_pending_polling_tasks = !polling_tasks.is_empty();
+            let has_pending_polling_tasks = !self.polling_task_buffer.borrow().is_empty();
             let is_early_iteration = iteration <= 1;
             let should_poll_reactors = has_pending_polling_tasks
                 || is_early_iteration
@@ -379,7 +389,8 @@ impl Runtime {
             }
 
             // === Process Polling Tasks ===
-            for task_id in polling_tasks {
+            // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+            for &task_id in self.polling_task_buffer.borrow().iter() {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -391,18 +402,22 @@ impl Runtime {
 
             // === Normal Task Queue (batch processing) ===
             // Process multiple tasks per iteration to improve throughput
+            // Use reusable buffer to avoid heap allocation on every iteration
             let batch_size = self.scheduling_config.task_batch_size;
-            let mut tasks = Vec::with_capacity(batch_size);
-
-            for _ in 0..batch_size {
-                if let Ok(task_id) = self.task_receiver.try_recv() {
-                    tasks.push(task_id);
-                } else {
-                    break;
+            {
+                let mut tasks = self.task_buffer.borrow_mut();
+                tasks.clear();
+                for _ in 0..batch_size {
+                    if let Ok(task_id) = self.task_receiver.try_recv() {
+                        tasks.push(task_id);
+                    } else {
+                        break;
+                    }
                 }
             }
 
-            for task_id in tasks {
+            // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+            for &task_id in self.task_buffer.borrow().iter() {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -558,16 +573,20 @@ impl Runtime {
             let mut made_progress = false;
 
             // === Polling Task Queue (process all available) ===
-            let mut polling_tasks = Vec::new();
-            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
-                polling_tasks.push(task_id);
+            // Use reusable buffer to avoid heap allocation on every iteration
+            {
+                let mut polling_tasks = self.polling_task_buffer.borrow_mut();
+                polling_tasks.clear();
+                while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                    polling_tasks.push(task_id);
+                }
             }
 
             // === Reactor Polling (interval-based with caching) ===
             // Always poll reactors when we have pending polling tasks (they may be waiting for I/O)
             // Or when iteration is 0 or 1 (initial iterations often have I/O operations)
             // Otherwise poll every N iterations to reduce overhead
-            let has_pending_polling_tasks = !polling_tasks.is_empty();
+            let has_pending_polling_tasks = !self.polling_task_buffer.borrow().is_empty();
             let is_early_iteration = iteration <= 1;
             let should_poll_reactors = has_pending_polling_tasks
                 || is_early_iteration
@@ -592,7 +611,8 @@ impl Runtime {
             }
 
             // === Process Polling Tasks ===
-            for task_id in polling_tasks {
+            // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+            for &task_id in self.polling_task_buffer.borrow().iter() {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -603,18 +623,22 @@ impl Runtime {
             }
 
             // === Normal Task Queue (batch processing) ===
+            // Use reusable buffer to avoid heap allocation on every iteration
             let batch_size = self.scheduling_config.task_batch_size;
-            let mut tasks = Vec::with_capacity(batch_size);
-
-            for _ in 0..batch_size {
-                if let Ok(task_id) = self.task_receiver.try_recv() {
-                    tasks.push(task_id);
-                } else {
-                    break;
+            {
+                let mut tasks = self.task_buffer.borrow_mut();
+                tasks.clear();
+                for _ in 0..batch_size {
+                    if let Ok(task_id) = self.task_receiver.try_recv() {
+                        tasks.push(task_id);
+                    } else {
+                        break;
+                    }
                 }
             }
 
-            for task_id in tasks {
+            // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+            for &task_id in self.task_buffer.borrow().iter() {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
                     let task = binding.get_mut(task_id);
@@ -747,11 +771,16 @@ impl Runtime {
         }
 
         // Process all currently available tasks from the polling queue
-        let mut polling_tasks = Vec::new();
-        while let Ok(task_id) = self.polling_task_receiver.try_recv() {
-            polling_tasks.push(task_id);
+        // Use reusable buffer to avoid heap allocation on every call
+        {
+            let mut polling_tasks = self.polling_task_buffer.borrow_mut();
+            polling_tasks.clear();
+            while let Ok(task_id) = self.polling_task_receiver.try_recv() {
+                polling_tasks.push(task_id);
+            }
         }
-        for task_id in polling_tasks {
+        // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+        for &task_id in self.polling_task_buffer.borrow().iter() {
             if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                 let mut binding = self.task_pool.borrow_mut();
                 let task = binding.get_mut(task_id);
