@@ -285,18 +285,18 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
         let has_pending_io = completed_count < submitted_count;
 
         if let Some(_) = self.io_uring_params.sq_poll {
+            // SQPOLLモードの場合、complete_timeoutのみチェック
+            if has_pending_io && elapsed >= self.io_uring_params.wait_complete_timeout {
+                return ReactorStatus::Running;
+            }
+        } else {
+            // SQPOLLモードでない場合、3条件をチェック
             let submission_len = submission.len();
-            // SQPOLLモードでは、submission queueと pending I/Oの両方をチェック
             if submission_len >= self.io_uring_params.submit_depth as usize
                 || (!submission.is_empty()
                     && elapsed >= self.io_uring_params.wait_submit_timeout)
                 || (has_pending_io && elapsed >= self.io_uring_params.wait_complete_timeout)
             {
-                return ReactorStatus::Running;
-            }
-        } else {
-            // 非SQPOLLモードでは、pending I/Oをチェック
-            if has_pending_io && elapsed >= self.io_uring_params.wait_complete_timeout {
                 return ReactorStatus::Running;
             }
         }
