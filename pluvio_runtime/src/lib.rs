@@ -51,6 +51,8 @@
 pub mod executor;
 /// Reactor implementation based on `io_uring`.
 pub mod reactor;
+/// Select utilities for combining multiple futures.
+pub mod select;
 /// Task abstraction and waker utilities.
 pub mod task;
 /// Track ID management for Perfetto trace visualization.
@@ -67,3 +69,6 @@ pub use track::{
     acquire_track_id, get_current_track_id, maybe_tracked, release_track_id, set_current_track_id,
     tracked, MaybeTracked, TrackedFuture,
 };
+
+// Re-export select utilities for combining futures
+pub use select::{select, Either, Select2};
