@@ -306,6 +306,127 @@ impl Drop for Delay {
     }
 }
 
+/// Error type returned when a timeout expires before the future completes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutError;
+
+impl std::fmt::Display for TimeoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "operation timed out")
+    }
+}
+
+impl std::error::Error for TimeoutError {}
+
+/// A future that enforces a timeout on an underlying future.
+///
+/// If the underlying future completes before the deadline, `Timeout` resolves
+/// with `Ok(result)`. If the deadline expires first, it resolves with `Err(TimeoutError)`.
+///
+/// When either condition is met, the other is cancelled (dropped).
+///
+/// # Example
+///
+/// ```ignore
+/// use pluvio_timer::{timeout, TimeoutError};
+/// use std::time::Duration;
+///
+/// async fn example() -> Result<i32, TimeoutError> {
+///     timeout(Duration::from_secs(5), Box::pin(some_async_operation())).await
+/// }
+/// ```
+pub struct Timeout<F> {
+    future: Option<F>,
+    delay: Delay,
+}
+
+impl<F> Timeout<F>
+where
+    F: std::future::Future + Unpin,
+{
+    /// Create a new timeout future with the given duration and underlying future.
+    pub fn new(duration: Duration, future: F) -> Self {
+        Self {
+            future: Some(future),
+            delay: Delay::new(duration),
+        }
+    }
+
+    /// Create a new timeout future with an absolute deadline.
+    pub fn new_at(deadline: Instant, future: F) -> Self {
+        Self {
+            future: Some(future),
+            delay: Delay::new_at(deadline),
+        }
+    }
+}
+
+impl<F> std::future::Future for Timeout<F>
+where
+    F: std::future::Future + Unpin,
+{
+    type Output = Result<F::Output, TimeoutError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // First, poll the user's future
+        if let Some(ref mut future) = self.future {
+            if let std::task::Poll::Ready(result) = std::pin::Pin::new(future).poll(cx) {
+                self.future = None; // Drop the future
+                return std::task::Poll::Ready(Ok(result));
+            }
+        }
+
+        // Then, check if the timeout has expired
+        if let std::task::Poll::Ready(()) = std::pin::Pin::new(&mut self.delay).poll(cx) {
+            self.future = None; // Cancel (drop) the user's future
+            return std::task::Poll::Ready(Err(TimeoutError));
+        }
+
+        std::task::Poll::Pending
+    }
+}
+
+/// Wraps a future with a timeout.
+///
+/// Returns `Ok(result)` if the future completes before the timeout,
+/// or `Err(TimeoutError)` if the timeout expires first.
+///
+/// # Example
+///
+/// ```ignore
+/// use pluvio_timer::{timeout, TimeoutError};
+/// use std::time::Duration;
+///
+/// async fn example() {
+///     match timeout(Duration::from_secs(5), Box::pin(async { 42 })).await {
+///         Ok(value) => println!("Got value: {}", value),
+///         Err(TimeoutError) => println!("Timed out!"),
+///     }
+/// }
+/// ```
+#[tracing::instrument(level = "trace", skip(future))]
+pub fn timeout<F>(duration: Duration, future: F) -> Timeout<F>
+where
+    F: std::future::Future + Unpin,
+{
+    Timeout::new(duration, future)
+}
+
+/// Wraps a future with a timeout using an absolute deadline.
+///
+/// Returns `Ok(result)` if the future completes before the deadline,
+/// or `Err(TimeoutError)` if the deadline passes first.
+#[tracing::instrument(level = "trace", skip(future))]
+pub fn timeout_at<F>(deadline: Instant, future: F) -> Timeout<F>
+where
+    F: std::future::Future + Unpin,
+{
+    Timeout::new_at(deadline, future)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
