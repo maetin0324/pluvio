@@ -144,7 +144,17 @@ impl IoUringReactor {
         let mut ring = self.ring.borrow_mut();
 
         // Check if there are pending SQEs to submit
-        let has_pending_sqes = !ring.submission().is_empty();
+        let pending_sqe_count = ring.submission().len();
+        let has_pending_sqes = pending_sqe_count > 0;
+
+        // Log SQ depth for performance analysis
+        if has_pending_sqes {
+            tracing::debug!(
+                "io_uring: submitting {} SQEs (io_depth={})",
+                pending_sqe_count,
+                pending_sqe_count
+            );
+        }
 
         if let Some(_) = self.io_uring_params.sq_poll {
             // SQPOLLモードの場合、submitは不要
