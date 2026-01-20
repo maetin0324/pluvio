@@ -2,7 +2,7 @@
 //! The [`DmaFile`] type wraps a standard `File` and provides asynchronous
 //! read/write helpers returning futures.
 
-use std::{fs::File, os::fd::AsRawFd, rc::Rc};
+use std::{fs::File, os::fd::{AsRawFd, FromRawFd}, rc::Rc};
 
 use crate::{allocator::FixedBuffer, reactor::IoUringReactor};
 
@@ -135,6 +135,50 @@ impl DmaFile {
         let sqe = io_uring::opcode::Fsync::new(io_uring::types::Fd(fd)).build();
 
         self.reactor.push_sqe(sqe).await
+    }
+
+    /// Open a file asynchronously using io_uring with the thread-local reactor.
+    #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(path))]
+    pub async fn open(path: &str, flags: i32, mode: u32) -> std::io::Result<DmaFile> {
+        let reactor = IoUringReactor::get_or_init();
+        Self::open_with_reactor(path, flags, mode, reactor).await
+    }
+
+    /// Open a file asynchronously using io_uring with an explicit reactor.
+    ///
+    /// This variant allows specifying a reactor instead of using the thread-local one,
+    /// which is important when the caller needs to ensure the DmaFile uses the same
+    /// reactor that registered fixed buffers.
+    ///
+    /// # Arguments
+    /// * `path` - File path as a string slice
+    /// * `flags` - Linux open flags (e.g., O_RDONLY, O_WRONLY | O_CREAT | O_DIRECT)
+    /// * `mode` - File permissions for creation (ignored if O_CREAT not set)
+    /// * `reactor` - The io_uring reactor to use
+    #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(path, reactor))]
+    pub async fn open_with_reactor(
+        path: &str,
+        flags: i32,
+        mode: u32,
+        reactor: Rc<IoUringReactor>,
+    ) -> std::io::Result<DmaFile> {
+        let path_cstr = std::ffi::CString::new(path).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "path contains null byte")
+        })?;
+
+        let sqe = io_uring::opcode::OpenAt::new(
+            io_uring::types::Fd(libc::AT_FDCWD),
+            path_cstr.as_ptr(),
+        )
+        .flags(flags)
+        .mode(mode)
+        .build();
+
+        let fd = reactor.push_sqe(sqe).await?;
+        let file = unsafe { File::from_raw_fd(fd) };
+        Ok(DmaFile { file, reactor })
     }
 
     #[async_backtrace::framed]
