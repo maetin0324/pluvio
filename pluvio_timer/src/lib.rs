@@ -136,11 +136,6 @@ impl TimerReactor {
         let handle = TimerHandle::new(deadline);
         self.timers.borrow_mut().insert(handle, waker);
         self.timer_count_atomic.fetch_add(1, Ordering::Relaxed);
-        tracing::debug!(
-            "TimerReactor: registered timer {:?} with deadline in {:?}",
-            handle,
-            deadline.saturating_duration_since(Instant::now())
-        );
         handle
     }
 
@@ -190,7 +185,6 @@ impl TimerReactor {
         for handle in expired {
             if let Some(waker) = timers.remove(&handle) {
                 self.timer_count_atomic.fetch_sub(1, Ordering::Relaxed);
-                tracing::debug!("TimerReactor: waking timer {:?}", handle);
                 waker.wake();
             }
         }
@@ -202,10 +196,6 @@ impl TimerReactor {
 impl Reactor for TimerReactor {
     fn poll(&self) {
         let expired_count = self.wake_expired_timers(Instant::now());
-
-        if expired_count > 0 {
-            tracing::debug!("TimerReactor: woke {} expired timers", expired_count);
-        }
     }
 
     fn status(&self) -> ReactorStatus {
@@ -276,10 +266,6 @@ impl std::future::Future for Delay {
 
         // Register timer if not already registered
         if self.timer_handle.is_none() {
-            tracing::debug!(
-                "Delay: registering timer with deadline in {:?}",
-                self.deadline.saturating_duration_since(now)
-            );
             let handle = self
                 .reactor
                 .register_timer(self.deadline, cx.waker().clone());
