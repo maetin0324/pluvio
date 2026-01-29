@@ -1,4 +1,5 @@
 pub mod reactor;
+pub mod stats;
 pub mod worker;
 
 pub use crate::reactor::*;

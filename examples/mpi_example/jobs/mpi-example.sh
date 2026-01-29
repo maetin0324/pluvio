@@ -6,7 +6,12 @@ TIMESTAMP="$(timestamp)"
 
 # default params
 : ${ELAPSTIM_REQ:="0:30:00"}
-: ${LABEL:=default}
+: ${LABEL:=read_bench}
+
+# Benchmark parameters (can be overridden by environment variables)
+: ${DATA_SIZE:=$((4 << 20))}        # 4 MiB per transfer (matching BenchFS chunk size)
+: ${NUM_TRANSFERS:=1024}              # Number of transfers per client
+: ${WINDOW_SIZE:=64}                 # Concurrent requests window
 
 JOB_FILE="$(remove_ext "$(this_file)")-job.sh"
 MPI_EXAMPLE_DIR="$(to_fullpath "$(this_directory)/..")"
@@ -15,10 +20,20 @@ MPI_EXAMPLE_PREFIX="${MPI_EXAMPLE_DIR}/target/release"
 
 # Debug: Print paths
 echo "=========================================="
-echo "MPI Example Job Submission"
+echo "MPI Remote READ Benchmark Job Submission"
 echo "=========================================="
 echo "MPI_EXAMPLE_DIR: $MPI_EXAMPLE_DIR"
 echo "MPI_EXAMPLE_PREFIX: $MPI_EXAMPLE_PREFIX"
+echo ""
+echo "Architecture:"
+echo "  - Nodes are split: half servers, half clients"
+echo "  - Servers and clients run as separate mpirun processes"
+echo ""
+echo "Benchmark Parameters:"
+echo "  DATA_SIZE: $((DATA_SIZE / (1 << 20))) MiB"
+echo "  NUM_TRANSFERS: $NUM_TRANSFERS"
+echo "  WINDOW_SIZE: $WINDOW_SIZE"
+echo "  Total per client: $((DATA_SIZE * NUM_TRANSFERS / (1 << 20))) MiB"
 echo ""
 echo "Checking binary:"
 ls -la "${MPI_EXAMPLE_PREFIX}/mpi_example" || echo "ERROR: Binary not found at ${MPI_EXAMPLE_PREFIX}/mpi_example"
@@ -27,7 +42,7 @@ echo "=========================================="
 mkdir -p "${OUTPUT_DIR}"
 
 nnodes_list=(
-  4
+  16
   # 4 8 16
 )
 niter=1
@@ -55,6 +70,9 @@ for nnodes in "${nnodes_list[@]}"; do
         -v SCRIPT_DIR="$SCRIPT_DIR"
         -v LABEL="$LABEL"
         -v MPI_EXAMPLE_PREFIX="$MPI_EXAMPLE_PREFIX"
+        -v DATA_SIZE="$DATA_SIZE"
+        -v NUM_TRANSFERS="$NUM_TRANSFERS"
+        -v WINDOW_SIZE="$WINDOW_SIZE"
         "${JOB_FILE}"
       )
       echo "${cmd_qsub[@]}"

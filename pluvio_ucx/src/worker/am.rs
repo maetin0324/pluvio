@@ -1,7 +1,9 @@
 use std::rc::Rc;
+use std::time::Instant;
 
 use tracing::instrument;
 
+use crate::stats::is_stats_enabled;
 use crate::worker::{endpoint::Endpoint, Worker};
 
 pub type AmStreamInner = async_ucx::ucp::AmStream;
@@ -43,11 +45,22 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
+        let start = if is_stats_enabled() { Some(Instant::now()) } else { None };
         self.worker.activate();
+
         let ret = self
             .endpoint
             .am_send(id, header, data, need_reply, proto)
             .await;
+
+        if let Some(start) = start {
+            let total_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                "AM_SEND_TIMING op=\"am_send\" am_id={} header_bytes={} data_bytes={} need_reply={} total_us={}",
+                id, header.len(), data.len(), need_reply, total_us
+            );
+        }
+
         // Do not deactivate here - messages may still be in flight in UCX layer
         // Let the reactor manage worker state based on actual activity
         ret
@@ -63,11 +76,23 @@ impl Endpoint {
         need_reply: bool,
         proto: Option<async_ucx::ucp::AmProto>,
     ) -> Result<(), async_ucx::Error> {
+        let start = if is_stats_enabled() { Some(Instant::now()) } else { None };
         self.worker.activate();
+
         let ret = self
             .endpoint
             .am_send_vectorized(id, header, iov, need_reply, proto)
             .await;
+
+        if let Some(start) = start {
+            let data_bytes: usize = iov.iter().map(|s| s.len()).sum();
+            let total_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                "AM_SEND_TIMING op=\"am_send_vectorized\" am_id={} header_bytes={} data_bytes={} iov_count={} need_reply={} total_us={}",
+                id, header.len(), data_bytes, iov.len(), need_reply, total_us
+            );
+        }
+
         // Do not deactivate here - messages may still be in flight in UCX layer
         // Let the reactor manage worker state based on actual activity
         ret
@@ -78,8 +103,20 @@ impl AmStream {
     #[instrument(level = "trace", skip(self))]
     #[async_backtrace::framed]
     pub async fn wait_msg(&self) -> Option<async_ucx::ucp::AmMsg> {
+        let start = if is_stats_enabled() { Some(Instant::now()) } else { None };
         self.worker.wait_connect();
+
         let ret = self.stream.wait_msg().await;
+
+        if let Some(start) = start {
+            let total_us = start.elapsed().as_micros() as u64;
+            let has_msg = ret.is_some();
+            tracing::debug!(
+                "AM_WAIT_MSG_TIMING stream_id={} has_msg={} total_us={}",
+                self.id, has_msg, total_us
+            );
+        }
+
         self.worker.deactivate();
         ret
     }
