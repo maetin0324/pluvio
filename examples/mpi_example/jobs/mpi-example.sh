@@ -10,8 +10,9 @@ TIMESTAMP="$(timestamp)"
 
 # Benchmark parameters (can be overridden by environment variables)
 : ${DATA_SIZE:=$((4 << 20))}        # 4 MiB per transfer (matching BenchFS chunk size)
-: ${NUM_TRANSFERS:=1024}              # Number of transfers per client
-: ${WINDOW_SIZE:=64}                 # Concurrent requests window
+: ${NUM_TRANSFERS:=1024}            # Number of transfers per client
+: ${WINDOW_SIZE:=64}                # Concurrent requests window
+: ${CLIENT_PPN:=1}                  # Client processes per node (server always ppn=1)
 
 JOB_FILE="$(remove_ext "$(this_file)")-job.sh"
 MPI_EXAMPLE_DIR="$(to_fullpath "$(this_directory)/..")"
@@ -26,13 +27,14 @@ echo "MPI_EXAMPLE_DIR: $MPI_EXAMPLE_DIR"
 echo "MPI_EXAMPLE_PREFIX: $MPI_EXAMPLE_PREFIX"
 echo ""
 echo "Architecture:"
-echo "  - Nodes are split: half servers, half clients"
+echo "  - All nodes run both server (ppn=1) and client (ppn=${CLIENT_PPN})"
 echo "  - Servers and clients run as separate mpirun processes"
 echo ""
 echo "Benchmark Parameters:"
 echo "  DATA_SIZE: $((DATA_SIZE / (1 << 20))) MiB"
 echo "  NUM_TRANSFERS: $NUM_TRANSFERS"
 echo "  WINDOW_SIZE: $WINDOW_SIZE"
+echo "  CLIENT_PPN: $CLIENT_PPN"
 echo "  Total per client: $((DATA_SIZE * NUM_TRANSFERS / (1 << 20))) MiB"
 echo ""
 echo "Checking binary:"
@@ -73,6 +75,7 @@ for nnodes in "${nnodes_list[@]}"; do
         -v DATA_SIZE="$DATA_SIZE"
         -v NUM_TRANSFERS="$NUM_TRANSFERS"
         -v WINDOW_SIZE="$WINDOW_SIZE"
+        -v CLIENT_PPN="$CLIENT_PPN"
         "${JOB_FILE}"
       )
       echo "${cmd_qsub[@]}"

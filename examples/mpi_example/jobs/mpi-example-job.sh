@@ -18,8 +18,9 @@ module load "openmpi/$NQSV_MPI_VER"
 # - OUTPUT_DIR
 # - MPI_EXAMPLE_PREFIX
 # - DATA_SIZE (optional, default: 4MiB)
-# - NUM_TRANSFERS (optional, default: 256)
-# - WINDOW_SIZE (optional, default: 32)
+# - NUM_TRANSFERS (optional, default: 1024)
+# - WINDOW_SIZE (optional, default: 64)
+# - CLIENT_PPN (optional, default: 1)
 
 source "$SCRIPT_DIR/common.sh"
 
@@ -29,13 +30,9 @@ JOBID=$(echo "$PBS_JOBID" | cut -d : -f 2)
 JOB_OUTPUT_DIR="${OUTPUT_DIR}/${JOB_START}-${JOBID}-${NNODES}"
 REGISTRY_DIR="${JOB_OUTPUT_DIR}/registry"
 
-# Split nodes: half for servers, half for clients
-SERVER_NODEFILE="${JOB_OUTPUT_DIR}/server_nodes"
-CLIENT_NODEFILE="${JOB_OUTPUT_DIR}/client_nodes"
-
 # Data directory - use local SSD if available
-if [ -d "/local" ]; then
-    DATA_DIR="/local/${USER}/mpi_read_bench"
+if [ -d "/scr" ]; then
+    DATA_DIR="/scr/${USER}/mpi_read_bench"
 else
     DATA_DIR="${JOB_OUTPUT_DIR}/data"
 fi
@@ -44,52 +41,14 @@ fi
 : ${DATA_SIZE:=$((4 << 20))}
 : ${NUM_TRANSFERS:=1024}
 : ${WINDOW_SIZE:=64}
+: ${CLIENT_PPN:=1}
 
-# ==============================================================================
-# UCX Configuration for MPI + UCX Integration Test
-# ==============================================================================
+# Server always runs with ppn=1
+SERVER_PPN=1
+SERVER_NP=$((NNODES * SERVER_PPN))
 
-# Force InfiniBand + TCP configuration for Socket connection mode
-# export UCX_TLS="tcp,rc_mlx5,sm,self"
-# export UCX_MEMTYPE_CACHE="n"
-# export UCX_NET_DEVICES="all"
-# export UCX_PROTOS="^ud,dc"
-
-# # Timeout and retry settings
-# export UCX_RC_TIMEOUT=2.0s
-# export UCX_RC_RETRY_COUNT=16
-# export UCX_RC_TIMEOUT_MULTIPLIER=4.0
-
-# # Active Message settings
-# export UCX_AM_MAX_SHORT=128
-# export UCX_AM_MAX_EAGER=8192
-# export UCX_RNDV_THRESH=inf
-
-# # RDMA settings
-# export UCX_ZCOPY_THRESH=0
-# export UCX_RNDV_SCHEME=get_zcopy
-# export UCX_IB_NUM_PATHS=2
-# export UCX_RC_MLX5_TM_ENABLE=y
-# export UCX_RC_MLX5_RX_QUEUE_LEN=4096
-
-# # Memory registration cache
-# export UCX_RCACHE_ENABLE=y
-
-# # Flow control
-# export UCX_RC_FC_ENABLE=y
-# export UCX_RC_MAX_NUM_EPS=-1
-
-# # Network layer
-# export UCX_IB_SEG_SIZE=8192
-# export UCX_RC_PATH_MTU=4096
-
-# # Progress settings
-# export UCX_ADAPTIVE_PROGRESS=y
-# export UCX_ASYNC_MAX_EVENTS=256
-# export UCX_USE_MT_MUTEX=n
-
-# # Logging level (set to WARN for production, DEBUG/TRACE for debugging)
-# export UCX_LOG_LEVEL="WARN"
+# Client runs with configurable ppn
+CLIENT_NP=$((NNODES * CLIENT_PPN))
 
 IFS=" " read -r -a nqsii_mpiopts_array <<<"$NQSII_MPIOPTS"
 
@@ -103,6 +62,10 @@ echo "Registry: ${REGISTRY_DIR}"
 echo "Data Dir: ${DATA_DIR}"
 echo "Binary: ${MPI_EXAMPLE_PREFIX}/mpi_example"
 echo ""
+echo "Process Configuration:"
+echo "  Server: PPN=${SERVER_PPN}, NP=${SERVER_NP}"
+echo "  Client: PPN=${CLIENT_PPN}, NP=${CLIENT_NP}"
+echo ""
 echo "Benchmark Parameters:"
 echo "  DATA_SIZE: $((DATA_SIZE / (1 << 20))) MiB"
 echo "  NUM_TRANSFERS: ${NUM_TRANSFERS}"
@@ -113,57 +76,27 @@ echo "=========================================="
 # Prepare output directory
 mkdir -p "${JOB_OUTPUT_DIR}"
 cp "$0" "${JOB_OUTPUT_DIR}"
-cp "${PBS_NODEFILE}" "${JOB_OUTPUT_DIR}"
+cp "${PBS_NODEFILE}" "${JOB_OUTPUT_DIR}/nodelist"
 printenv >"${JOB_OUTPUT_DIR}/env.txt"
 
 # Prepare registry directory
 mkdir -p "${REGISTRY_DIR}"
 
-# Split nodes into servers and clients (half and half)
-UNIQUE_NODES=$(cat "${PBS_NODEFILE}" | sort -u)
-NUM_UNIQUE_NODES=$(echo "$UNIQUE_NODES" | wc -l)
-NUM_SERVER_NODES=$((NUM_UNIQUE_NODES / 2))
-NUM_CLIENT_NODES=$((NUM_UNIQUE_NODES - NUM_SERVER_NODES))
-
-echo "$UNIQUE_NODES" | head -n "$NUM_SERVER_NODES" > "${SERVER_NODEFILE}"
-echo "$UNIQUE_NODES" | tail -n "$NUM_CLIENT_NODES" > "${CLIENT_NODEFILE}"
-
-echo "Node allocation:"
-echo "  Total unique nodes: ${NUM_UNIQUE_NODES}"
-echo "  Server nodes: ${NUM_SERVER_NODES}"
-echo "  Client nodes: ${NUM_CLIENT_NODES}"
-echo ""
-echo "Server nodes:"
-cat "${SERVER_NODEFILE}"
-echo ""
-echo "Client nodes:"
-cat "${CLIENT_NODEFILE}"
-echo ""
-
-# Prepare data directory on server nodes only
-echo "Creating data directory on server nodes..."
-for node in $(cat "${SERVER_NODEFILE}"); do
+# Prepare data directory on all nodes
+echo "Creating data directory on all nodes..."
+for node in $(cat "${PBS_NODEFILE}" | sort -u); do
     ssh "$node" "mkdir -p ${DATA_DIR}" || true
 done
 
 # MPI Configuration: Use ob1/tcp to avoid UCX context conflicts
 # mpi_example manages UCX directly for Socket + InfiniBand communication
-cmd_mpirun=(
+# Note: vader (shared memory) is disabled to avoid errors with high ppn values
+cmd_mpirun_common=(
   mpirun
   "${nqsii_mpiopts_array[@]}"
   --mca pml ob1
-  --mca btl tcp,vader,self
+  --mca btl tcp,self
   --mca btl_openib_allow_ib 0
-  -x UCX_TLS
-  -x UCX_NET_DEVICES
-  -x UCX_MEMTYPE_CACHE
-  -x UCX_PROTOS
-  -x UCX_LOG_LEVEL
-  -x UCX_RNDV_THRESH
-  -x UCX_RNDV_SCHEME
-  -x UCX_RC_TIMEOUT
-  -x UCX_RC_RETRY_COUNT
-  -x UCX_RC_TIMEOUT_MULTIPLIER
   -x PATH
 )
 
@@ -178,17 +111,17 @@ echo ""
 echo "=========================================="
 echo "Running Remote READ Benchmark"
 echo "=========================================="
-echo "Server processes: ${NUM_SERVER_NODES}"
-echo "Client processes: ${NUM_CLIENT_NODES}"
+echo "Server: ${SERVER_NP} processes (PPN=${SERVER_PPN})"
+echo "Client: ${CLIENT_NP} processes (PPN=${CLIENT_PPN})"
 echo "=========================================="
 echo ""
 
-# Server command
+# Server command: ppn=1 on all nodes
 cmd_server=(
-  "${cmd_mpirun[@]}"
-  --hostfile "${SERVER_NODEFILE}"
-  -np "${NUM_SERVER_NODES}"
-  --bind-to core
+  "${cmd_mpirun_common[@]}"
+  -np "${SERVER_NP}"
+  --map-by "ppr:${SERVER_PPN}:node"
+  --bind-to none
   -x RUST_LOG
   -x RUST_BACKTRACE
   -x DATA_SIZE="${DATA_SIZE}"
@@ -198,12 +131,12 @@ cmd_server=(
   "${DATA_DIR}"
 )
 
-# Client command
+# Client command: ppn=CLIENT_PPN on all nodes
 cmd_client=(
-  "${cmd_mpirun[@]}"
-  --hostfile "${CLIENT_NODEFILE}"
-  -np "${NUM_CLIENT_NODES}"
-  --bind-to core
+  "${cmd_mpirun_common[@]}"
+  -np "${CLIENT_NP}"
+  --map-by "ppr:${CLIENT_PPN}:node"
+  --bind-to none
   -x RUST_LOG
   -x RUST_BACKTRACE
   -x DATA_SIZE="${DATA_SIZE}"
@@ -212,7 +145,7 @@ cmd_client=(
   "${MPI_EXAMPLE_PREFIX}/mpi_example"
   client
   "${REGISTRY_DIR}"
-  "${NUM_SERVER_NODES}"
+  "${SERVER_NP}"
 )
 
 echo "Server command: ${cmd_server[@]}"
@@ -233,19 +166,21 @@ MAX_WAIT=60
 WAIT_COUNT=0
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
     SOCKET_COUNT=$(find "${REGISTRY_DIR}" -name "server_*.socket" 2>/dev/null | wc -l)
-    if [ "$SOCKET_COUNT" -ge "$NUM_SERVER_NODES" ]; then
-        echo "All ${NUM_SERVER_NODES} servers are ready"
+    if [ "$SOCKET_COUNT" -ge "$SERVER_NP" ]; then
+        echo "All ${SERVER_NP} servers are ready"
         break
     fi
     sleep 1
     WAIT_COUNT=$((WAIT_COUNT + 1))
     if [ $((WAIT_COUNT % 10)) -eq 0 ]; then
-        echo "  Waiting... ($SOCKET_COUNT/$NUM_SERVER_NODES servers ready)"
+        echo "  Waiting... ($SOCKET_COUNT/$SERVER_NP servers ready)"
     fi
 done
 
 if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
     echo "ERROR: Timeout waiting for servers to start"
+    echo "Server stderr:"
+    cat "${JOB_OUTPUT_DIR}/server_stderr.log" || true
     kill $SERVER_PID 2>/dev/null || true
     exit 1
 fi
@@ -302,10 +237,10 @@ else
   cat "${JOB_OUTPUT_DIR}/client_stderr.log"
 fi
 
-# Cleanup data files on server nodes
+# Cleanup data files on all nodes
 echo ""
 echo "Cleaning up data files..."
-for node in $(cat "${SERVER_NODEFILE}"); do
+for node in $(cat "${PBS_NODEFILE}" | sort -u); do
     ssh "$node" "rm -rf ${DATA_DIR}" || true
 done
 
@@ -316,5 +251,16 @@ echo "  ${JOB_OUTPUT_DIR}/server_stderr.log"
 echo "  ${JOB_OUTPUT_DIR}/client_stdout.log"
 echo "  ${JOB_OUTPUT_DIR}/client_stderr.log"
 echo "=========================================="
+
+# Copy PBS stdout/stderr to job output directory
+# PBS files are in SCRIPT_DIR (jobs directory), named like: mpi-example-job.sh.o<jobid> and mpi-example-job.sh.e<jobid>
+PBS_STDOUT="${SCRIPT_DIR}/mpi-example-job.sh.o${JOBID}"
+PBS_STDERR="${SCRIPT_DIR}/mpi-example-job.sh.e${JOBID}"
+if [ -f "${PBS_STDOUT}" ]; then
+    cp "${PBS_STDOUT}" "${JOB_OUTPUT_DIR}/pbs_stdout.log"
+fi
+if [ -f "${PBS_STDERR}" ]; then
+    cp "${PBS_STDERR}" "${JOB_OUTPUT_DIR}/pbs_stderr.log"
+fi
 
 exit ${EXIT_CODE}

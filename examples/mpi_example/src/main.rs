@@ -200,15 +200,20 @@ fn main() {
     let runtime = Runtime::new(1024);
     pluvio_runtime::set_runtime(runtime.clone());
 
-    // Create io_uring reactor
-    let uring_reactor = IoUringReactor::builder()
-        .queue_size(2048)
-        .buffer_size(data_size)
-        .submit_depth(64)
-        .wait_submit_timeout(Duration::from_millis(1))
-        .wait_complete_timeout(Duration::from_millis(1))
-        .build();
-    runtime.register_reactor("io_uring", uring_reactor.clone());
+    // Create io_uring reactor only for servers (to avoid OOM with many clients)
+    let uring_reactor = if role == Role::Server {
+        let reactor = IoUringReactor::builder()
+            .queue_size(2048)
+            .buffer_size(data_size)
+            .submit_depth(64)
+            .wait_submit_timeout(Duration::from_millis(1))
+            .wait_complete_timeout(Duration::from_millis(1))
+            .build();
+        runtime.register_reactor("io_uring", reactor.clone());
+        Some(reactor)
+    } else {
+        None
+    };
 
     // Create UCX reactor and context
     let ucx_reactor = UCXReactor::current();
@@ -217,7 +222,7 @@ fn main() {
     // Run benchmark
     let result = run_benchmark(
         runtime.clone(),
-        uring_reactor.clone(),
+        uring_reactor,
         ucx_reactor.clone(),
         mpi_rank,
         mpi_size,
@@ -251,7 +256,7 @@ fn main() {
 
 fn run_benchmark(
     runtime: Rc<Runtime>,
-    uring_reactor: Rc<IoUringReactor>,
+    uring_reactor: Option<Rc<IoUringReactor>>,
     reactor: Rc<UCXReactor>,
     mpi_rank: i32,
     mpi_size: i32,
@@ -278,9 +283,10 @@ fn run_benchmark(
     pluvio_runtime::run_with_name("read_benchmark", async move {
         match role {
             Role::Server => {
+                let uring = uring_reactor.expect("Server requires io_uring reactor");
                 run_server(
                     runtime,
-                    uring_reactor,
+                    uring,
                     worker,
                     mpi_rank,
                     registry_dir,
