@@ -1,0 +1,77 @@
+//! `MpiCommunicator`: thin wrapper around `MPI_COMM_WORLD`.
+
+use std::rc::Rc;
+
+use mpi_sys::{MPI_Comm_rank, MPI_Comm_size, MPI_SUCCESS, RSMPI_COMM_WORLD as MPI_COMM_WORLD};
+
+use crate::communicator::Communicator;
+use crate::error::CollectiveError;
+use crate::mpi_backend::allreduce::AllreduceFuture;
+use crate::mpi_backend::datatype::MpiDatatype;
+use crate::mpi_backend::reactor::MpiReactor;
+use crate::op::Op;
+use crate::Collective;
+
+/// MPI-backed communicator over `MPI_COMM_WORLD`.
+///
+/// `MPI_Init_thread` (or `MPI_Init`) must have been called before constructing
+/// this, and `MPI_Finalize` is the caller's responsibility (typically at
+/// program exit).
+pub struct MpiCommunicator {
+    rank: usize,
+    size: usize,
+    reactor: Rc<MpiReactor>,
+}
+
+impl MpiCommunicator {
+    /// Build a communicator for `MPI_COMM_WORLD`. The caller must have
+    /// initialised MPI; this only queries `rank` and `size`.
+    pub fn world(reactor: Rc<MpiReactor>) -> Result<Self, CollectiveError> {
+        let mut rank: i32 = 0;
+        let mut size: i32 = 0;
+        // SAFETY: MPI is assumed initialised. Both calls only read state from
+        // MPI_COMM_WORLD and write to local stack variables.
+        unsafe {
+            let rc = MPI_Comm_rank(MPI_COMM_WORLD, &mut rank);
+            if rc != MPI_SUCCESS as i32 {
+                return Err(CollectiveError::Mpi(rc));
+            }
+            let rc = MPI_Comm_size(MPI_COMM_WORLD, &mut size);
+            if rc != MPI_SUCCESS as i32 {
+                return Err(CollectiveError::Mpi(rc));
+            }
+        }
+        Ok(Self {
+            rank: rank as usize,
+            size: size as usize,
+            reactor,
+        })
+    }
+
+    /// Access the underlying reactor (used by examples that want to drive the
+    /// runtime explicitly).
+    pub fn reactor(&self) -> &Rc<MpiReactor> {
+        &self.reactor
+    }
+}
+
+impl Communicator for MpiCommunicator {
+    fn rank(&self) -> usize {
+        self.rank
+    }
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+impl<T: MpiDatatype> Collective<T> for MpiCommunicator {
+    type AllreduceFut<'a>
+        = AllreduceFuture<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
+
+    fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a> {
+        AllreduceFuture::new(self.reactor.clone(), buf, O::mpi_op())
+    }
+}

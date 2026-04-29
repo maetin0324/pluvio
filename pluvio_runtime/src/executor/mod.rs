@@ -91,6 +91,11 @@ pub struct Runtime {
     polling_task_buffer: RefCell<Vec<usize>>,
     /// Reusable buffer for normal tasks to avoid repeated heap allocations
     task_buffer: RefCell<Vec<usize>>,
+    /// Number of consecutive iterations with no task completion (for idle parking).
+    idle_iter_count: Cell<u64>,
+    /// Number of consecutive iterations with reactor poll but no task progress
+    /// (for safety-bound backstop: force task drain if too many polls-without-progress).
+    reactor_only_count: Cell<u64>,
 }
 
 // Thread-local storage for the runtime
@@ -125,6 +130,8 @@ impl Runtime {
             iteration_count: Cell::new(0),
             polling_task_buffer: RefCell::new(Vec::with_capacity(64)),
             task_buffer: RefCell::new(Vec::with_capacity(config.task_batch_size)),
+            idle_iter_count: Cell::new(0),
+            reactor_only_count: Cell::new(0),
         })
     }
 
@@ -364,9 +371,30 @@ impl Runtime {
             // Otherwise poll every N iterations to reduce overhead
             let has_pending_polling_tasks = !self.polling_task_buffer.borrow().is_empty();
             let is_early_iteration = iteration <= 1;
-            let should_poll_reactors = has_pending_polling_tasks
-                || is_early_iteration
-                || (iteration % self.scheduling_config.reactor_poll_interval as u64 == 0);
+
+            // Safety bound: if reactors keep returning Running but no task
+            // completes for a long time, skip reactor polling this iteration
+            // to force task-queue drainage. Backstop against buggy or
+            // adversarial reactors that always report Running.
+            // Safety bound default set to a large value so that normal
+            // pipelined workloads (where reactor-only iterations between
+            // task completions can reach thousands) do not trip it. This
+            // is purely a backstop against adversarial reactors that
+            // *never* produce completions; 1M iterations at ~1us each
+            // is ~1s, which is safely beyond any legitimate gap.
+            let safety_bound = std::env::var("PLUVIO_MAX_REACTOR_ONLY")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(1_000_000);
+            let safety_override = self.reactor_only_count.get() >= safety_bound;
+            if safety_override {
+                self.reactor_only_count.set(0);
+            }
+
+            let should_poll_reactors = !safety_override
+                && (has_pending_polling_tasks
+                    || is_early_iteration
+                    || (iteration % self.scheduling_config.reactor_poll_interval as u64 == 0));
 
             if should_poll_reactors {
                 let reactors_ref = self.reactors.borrow();
@@ -416,7 +444,12 @@ impl Runtime {
                 }
             }
 
-            // Use iter() instead of into_iter() to avoid IntoIter drop overhead
+            // Track whether any task actually completed this iteration.
+            // Reactor polling alone does not count as progress for idle-park
+            // purposes: a reactor may be "Running" because of a long-lived
+            // accept/recv but not produce any completions, which is the
+            // quiescent state we want to park for.
+            let mut task_completed_this_iter = false;
             for &task_id in self.task_buffer.borrow().iter() {
                 if let Some(Poll::Ready(_)) = self.poll_task(task_id) {
                     let mut binding = self.task_pool.borrow_mut();
@@ -424,7 +457,60 @@ impl Runtime {
                     self.stat.add_task_stat(task);
                     binding.remove(task_id);
                     made_progress = true;
+                    task_completed_this_iter = true;
                 }
+            }
+
+            // === Idle parking ===
+            // If the executor has been polling reactors without any task
+            // completion for several iterations, yield briefly to the OS.
+            // This reduces busy-poll CPU usage at idle (motivated by
+            // Section VI's CPU-footprint discussion: single-threaded does
+            // not imply low CPU unless the runtime parks when quiescent).
+            // We use a conservative progressive backoff: sched_yield first,
+            // then nanosleep(1us), capped at 10us to preserve responsiveness
+            // under actual load.
+            // Track reactor-only iterations (for safety bound above).
+            if !task_completed_this_iter && should_poll_reactors {
+                self.reactor_only_count
+                    .set(self.reactor_only_count.get().wrapping_add(1));
+            } else if task_completed_this_iter {
+                self.reactor_only_count.set(0);
+            }
+
+            let idle_park_enabled = std::env::var("PLUVIO_IDLE_PARK")
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            if idle_park_enabled && !task_completed_this_iter {
+                let idle_iter = self.idle_iter_count.get().wrapping_add(1);
+                self.idle_iter_count.set(idle_iter);
+                // Start yielding after a short warmup (avoid penalizing
+                // bursts of brief reactor-only activity).
+                // Only park when we are *clearly* idle. During pipelined
+                // I/O, task completions can be batched and separated by
+                // hundreds of reactor-polling iterations; parking too
+                // eagerly here would harm throughput. Use generous thresholds
+                // so that active load (iteration time ~1us, completions every
+                // few hundred us) does not trigger parking.
+                //
+                // These thresholds are env-tunable for experimentation:
+                //   PLUVIO_IDLE_YIELD_AFTER: iterations before sched_yield
+                //     (default 10_000, ~10ms of reactor-only work)
+                //   PLUVIO_IDLE_SLEEP_AFTER: iterations before 10us sleep
+                //     (default 100_000, ~100ms of reactor-only work)
+                let yield_after: u64 = std::env::var("PLUVIO_IDLE_YIELD_AFTER")
+                    .ok().and_then(|s| s.parse().ok()).unwrap_or(10_000);
+                let sleep_after: u64 = std::env::var("PLUVIO_IDLE_SLEEP_AFTER")
+                    .ok().and_then(|s| s.parse().ok()).unwrap_or(100_000);
+                if idle_iter >= yield_after {
+                    if idle_iter < sleep_after {
+                        std::thread::yield_now();
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_micros(10));
+                    }
+                }
+            } else {
+                self.idle_iter_count.set(0);
             }
 
             // Check if runtime is stuck

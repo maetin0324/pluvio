@@ -1,0 +1,31 @@
+[package]
+name = "pluvio_collective"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["mpi", "ucx"]
+mpi = ["dep:mpi-sys"]
+ucx = []
+
+[dependencies]
+pluvio_runtime = { path = "../pluvio_runtime" }
+pluvio_ucx = { path = "../pluvio_ucx" }
+mpi-sys = { version = "0.2", optional = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+thiserror = "1"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+anyhow = "1"
+tracing-subscriber = { workspace = true }
+rand = "0.8"
+
+[[example]]
+name = "coll_mpi_example"
+required-features = ["mpi"]
+
+[[example]]
+name = "coll_ucx_example"
+required-features = ["ucx"]
