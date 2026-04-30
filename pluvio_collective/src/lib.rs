@@ -24,10 +24,15 @@ use std::future::Future;
 
 /// Collective operations supported by both backends.
 ///
-/// Phase 1+2 only exposes `Allreduce`. Future phases (broadcast, allgather,
-/// reduce_scatter, alltoall) will extend this trait.
+/// Phase 1+2 currently exposes `Allreduce` and `Scatter`. Future phases
+/// (broadcast, allgather, reduce_scatter, alltoall) will extend this trait.
 pub trait Collective<T>: Communicator {
     type AllreduceFut<'a>: Future<Output = Result<(), CollectiveError>>
+    where
+        Self: 'a,
+        T: 'a;
+
+    type ScatterFut<'a>: Future<Output = Result<(), CollectiveError>>
     where
         Self: 'a,
         T: 'a;
@@ -36,4 +41,17 @@ pub trait Collective<T>: Communicator {
     /// across all ranks. The reduction operator is selected via the type
     /// parameter `O`.
     fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a>;
+
+    /// Scatter the `send_buf` held by `root` into per-rank `recv_buf` chunks.
+    ///
+    /// At rank `root`, `send_buf` must be `Some(&[T])` of length
+    /// `recv_buf.len() * size()` — the buffer is divided into `size()` equal
+    /// chunks, and the chunk at index `r` is delivered to rank `r`. At every
+    /// other rank `send_buf` is ignored and may be `None`.
+    fn scatter<'a>(
+        &'a self,
+        send_buf: Option<&'a [T]>,
+        recv_buf: &'a mut [T],
+        root: usize,
+    ) -> Self::ScatterFut<'a>;
 }

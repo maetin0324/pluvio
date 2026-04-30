@@ -7,11 +7,13 @@ pub mod allreduce;
 pub mod communicator;
 pub mod datatype;
 pub mod reactor;
+pub mod scatter;
 
 pub use allreduce::AllreduceFuture;
 pub use communicator::MpiCommunicator;
 pub use datatype::MpiDatatype;
 pub use reactor::MpiReactor;
+pub use scatter::ScatterFuture as MpiScatterFuture;
 
 /// Apply environment variables that disable MPI internal async progress
 /// threads, so progress is driven solely by `MpiReactor::poll`.

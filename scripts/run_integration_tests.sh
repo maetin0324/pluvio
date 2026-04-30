@@ -53,4 +53,6 @@ PORT=$((PORT + 1))
 run_one ucx_allreduce_2proc
 PORT=$((PORT + 1))
 run_one cross_check
+PORT=$((PORT + 1))
+run_one scatter_2proc
 echo "[run_integration_tests] all tests passed"

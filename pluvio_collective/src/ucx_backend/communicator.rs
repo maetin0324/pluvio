@@ -11,6 +11,7 @@ use crate::error::CollectiveError;
 use crate::op::Op;
 use crate::ucx_backend::am_router::AmRouter;
 use crate::ucx_backend::ring::{RingAllreduceFuture, ring_allreduce_typed};
+use crate::ucx_backend::scatter::{ScatterFuture, scatter_typed};
 
 /// AM id used by the collective layer. We use a single id and disambiguate
 /// via the header (src, step, phase). For multiple concurrent communicators a
@@ -75,8 +76,23 @@ where
         Self: 'a,
         T: 'a;
 
+    type ScatterFut<'a>
+        = ScatterFuture<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
+
     fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a> {
         ring_allreduce_typed::<T, O>(self, buf)
+    }
+
+    fn scatter<'a>(
+        &'a self,
+        send_buf: Option<&'a [T]>,
+        recv_buf: &'a mut [T],
+        root: usize,
+    ) -> Self::ScatterFut<'a> {
+        scatter_typed::<T>(self, send_buf, recv_buf, root)
     }
 }
 
@@ -89,5 +105,19 @@ impl UcxCommunicator {
         O: Op<T>,
     {
         ring_allreduce_typed::<T, O>(self, buf).await
+    }
+
+    /// Convenience for explicit error handling without going through the
+    /// `Collective` trait.
+    pub async fn scatter_with<T>(
+        &self,
+        send_buf: Option<&[T]>,
+        recv_buf: &mut [T],
+        root: usize,
+    ) -> Result<(), CollectiveError>
+    where
+        T: Copy + bytemuck::Pod + 'static,
+    {
+        scatter_typed::<T>(self, send_buf, recv_buf, root).await
     }
 }

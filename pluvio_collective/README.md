@@ -1,6 +1,6 @@
 # pluvio_collective
 
-非同期集団通信 (`Allreduce`) を Pluvio の `Reactor` trait の上で動かす実装。
+非同期集団通信 (`Allreduce`, `Scatter`) を Pluvio の `Reactor` trait の上で動かす実装。
 Phase 1+2 の最小実装で、`docs/pluvio_collective_plan.md` に書かれた DOD のうち
 存在証明 (existence proof) と正しさ検証までをカバーする。
 
@@ -8,11 +8,23 @@ Phase 1+2 の最小実装で、`docs/pluvio_collective_plan.md` に書かれた 
 
 | バックエンド | 概要 | feature flag |
 |---|---|---|
-| `mpi_backend` | `MPI_Iallreduce` を `mpi-sys` 直叩きで Future 化 | `mpi` |
-| `ucx_backend` | `pluvio_ucx` の Active Message に乗せた Ring Allreduce | `ucx` |
+| `mpi_backend` | `MPI_Iallreduce` / `MPI_Iscatter` を `mpi-sys` 直叩きで Future 化 | `mpi` |
+| `ucx_backend` | `pluvio_ucx` の Active Message に乗せた Ring Allreduce と直送り型 Scatter | `ucx` |
 
 両方が `Communicator` / `Collective<T>` trait を impl するので、上位アプリは同じ
 インタフェースで両方を試せる。
+
+`Collective<T>` の現状の操作は以下のとおり (順次拡張予定):
+
+```rust
+fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a>;
+fn scatter<'a>(
+    &'a self,
+    send_buf: Option<&'a [T]>,  // Some at root, None elsewhere
+    recv_buf: &'a mut [T],
+    root: usize,
+) -> Self::ScatterFut<'a>;
+```
 
 ## クイックスタート
 
@@ -34,7 +46,8 @@ scripts/run_integration_tests.sh
 
 1. `mpi_allreduce_2proc` — Phase 1 の MPI ラップ allreduce
 2. `ucx_allreduce_2proc` — Phase 2 の UCX 直書き ring allreduce
-3. `cross_check` — 同じ入力で MPI 版と UCX 版を実行し、相対誤差 `1e-3` 以内で一致することを検証
+3. `cross_check` — 同じ入力で MPI 版と UCX 版の allreduce を実行し、相対誤差 `1e-3` 以内で一致することを検証
+4. `scatter_2proc` — MPI 版と UCX 版の scatter で、root の送信バッファが正しく分散されることを検証
 
 `PROCS` (プロセス数)、`PORT` (rendezvous 用 TCP ポート)、`PROFILE`
 (`debug`/`release`) を環境変数で上書きできる。
@@ -76,9 +89,9 @@ UCX 側は `bootstrap_communicator` で `Vec<Option<Rc<Endpoint>>>` を作って
 
 ## Phase 1+2 の制約 (= 触らないもの)
 
-- `Allreduce` だけ。`Broadcast`/`Allgather`/`Alltoall` は未実装
+- `Allreduce` と `Scatter` のみ。`Broadcast`/`Allgather`/`Alltoall` は未実装
 - Pipelining (chunk のさらなる分割) なし
-- アルゴリズムは ring 1 種のみ。recursive doubling や Bruck は未実装
+- アルゴリズムは allreduce が ring 1 種、scatter が root から直送り 1 種のみ。recursive doubling や Bruck は未実装
 - `f32`/`f64`/`u32` のみ。bf16 や任意型は未対応
 - GPU buffer 非対応 (CPU buffer のみ)
 - 単一スレッド前提 (Pluvio runtime の制約)
@@ -109,17 +122,20 @@ pluvio_collective/
 │   │   ├── reactor.rs             # MpiReactor (MPI_Test ループ)
 │   │   ├── communicator.rs        # MpiCommunicator
 │   │   ├── datatype.rs            # MpiDatatype trait
-│   │   └── allreduce.rs           # AllreduceFuture
+│   │   ├── allreduce.rs           # AllreduceFuture (MPI_Iallreduce)
+│   │   └── scatter.rs             # ScatterFuture (MPI_Iscatter)
 │   └── ucx_backend/
 │       ├── am_router.rs           # AM ID + (src, step, phase) → slot
 │       ├── bootstrap.rs           # TCP rendezvous で WorkerAddress 交換
 │       ├── communicator.rs        # UcxCommunicator
-│       └── ring.rs                # ring_allreduce
+│       ├── ring.rs                # ring_allreduce
+│       └── scatter.rs             # 直送り scatter (root → 各 rank の AM 1 通)
 ├── examples/
 │   ├── coll_mpi_example.rs
 │   └── coll_ucx_example.rs
 └── tests/
     ├── mpi_allreduce_2proc.rs     # #[ignore]
     ├── ucx_allreduce_2proc.rs     # #[ignore]
-    └── cross_check.rs              # #[ignore]
+    ├── cross_check.rs             # #[ignore]
+    └── scatter_2proc.rs           # #[ignore]: MPI/UCX scatter
 ```

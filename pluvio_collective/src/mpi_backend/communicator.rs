@@ -9,8 +9,11 @@ use crate::error::CollectiveError;
 use crate::mpi_backend::allreduce::AllreduceFuture;
 use crate::mpi_backend::datatype::MpiDatatype;
 use crate::mpi_backend::reactor::MpiReactor;
+use crate::mpi_backend::scatter::ScatterFuture;
 use crate::op::Op;
 use crate::Collective;
+use std::future::Future;
+use std::pin::Pin;
 
 /// MPI-backed communicator over `MPI_COMM_WORLD`.
 ///
@@ -71,7 +74,28 @@ impl<T: MpiDatatype> Collective<T> for MpiCommunicator {
         Self: 'a,
         T: 'a;
 
+    type ScatterFut<'a>
+        = Pin<Box<dyn Future<Output = Result<(), CollectiveError>> + 'a>>
+    where
+        Self: 'a,
+        T: 'a;
+
     fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a> {
         AllreduceFuture::new(self.reactor.clone(), buf, O::mpi_op())
+    }
+
+    fn scatter<'a>(
+        &'a self,
+        send_buf: Option<&'a [T]>,
+        recv_buf: &'a mut [T],
+        root: usize,
+    ) -> Self::ScatterFut<'a> {
+        let reactor = self.reactor.clone();
+        let rank = self.rank;
+        let size = self.size;
+        Box::pin(async move {
+            let fut = ScatterFuture::new(reactor, send_buf, recv_buf, root, rank, size)?;
+            fut.await
+        })
     }
 }
