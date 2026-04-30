@@ -1,4 +1,5 @@
-//! Phase 2 demo: ring allreduce on top of UCX Active Messages.
+//! Phase 2 demo: ring allreduce and direct-send scatter on top of UCX Active
+//! Messages.
 //!
 //! Run with mpiexec (which sets `OMPI_COMM_WORLD_RANK/SIZE`), or by manually
 //! exporting `PLUVIO_COLL_RANK`, `PLUVIO_COLL_SIZE`, `PLUVIO_COLL_ROOT_HOST`,
@@ -70,8 +71,10 @@ fn main() -> anyhow::Result<()> {
         let size = comm_clone.size();
         let chunks = size; // ensure divisibility
         let per_chunk = 256;
-        let mut buf = vec![rank as f32 + 1.0; chunks * per_chunk];
+        const ROOT: usize = 0;
 
+        // --- Allreduce ---
+        let mut buf = vec![rank as f32 + 1.0; chunks * per_chunk];
         comm_clone
             .allreduce_with::<f32, Sum>(&mut buf)
             .await
@@ -83,9 +86,35 @@ fn main() -> anyhow::Result<()> {
             .map(|v| (v - expected).abs())
             .fold(0.0_f32, f32::max);
         println!(
-            "rank {}/{}: buf[0]={}, expected={}, max_abs_err={}",
+            "[allreduce] rank {}/{}: buf[0]={}, expected={}, max_abs_err={}",
             rank, size, buf[0], expected, max_abs_err,
         );
+
+        // --- Scatter ---
+        let scatter_send: Option<Vec<f32>> = if rank == ROOT {
+            Some(
+                (0..size)
+                    .flat_map(|r| std::iter::repeat(r as f32 + 0.5).take(per_chunk))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        let mut scatter_recv = vec![0.0_f32; per_chunk];
+        comm_clone
+            .scatter_with(scatter_send.as_deref(), &mut scatter_recv, ROOT)
+            .await
+            .expect("scatter");
+        let expected_chunk = rank as f32 + 0.5;
+        let scatter_err = scatter_recv
+            .iter()
+            .map(|v| (v - expected_chunk).abs())
+            .fold(0.0_f32, f32::max);
+        println!(
+            "[scatter  ] rank {}/{}: recv[0]={}, expected={}, max_abs_err={}",
+            rank, size, scatter_recv[0], expected_chunk, scatter_err,
+        );
+
         am_stream_for_close.close();
     });
 

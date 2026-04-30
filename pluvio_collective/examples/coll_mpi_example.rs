@@ -1,4 +1,4 @@
-//! Phase 1 demo: MPI Iallreduce driven by Pluvio's runtime.
+//! Phase 1 demo: MPI `Iallreduce` and `Iscatter` driven by Pluvio's runtime.
 //!
 //! Run with:
 //! ```sh
@@ -8,7 +8,7 @@
 use std::os::raw::c_int;
 
 use pluvio_collective::mpi_backend::{disable_async_progress, MpiCommunicator, MpiReactor};
-use pluvio_collective::{Communicator, Sum};
+use pluvio_collective::{Collective, Communicator, Sum};
 use pluvio_runtime::executor::Runtime;
 
 fn main() {
@@ -43,20 +43,51 @@ fn main() {
     let comm = MpiCommunicator::world(reactor).expect("MpiCommunicator::world failed");
     let rank = comm.rank();
     let size = comm.size();
-    let mut buf = vec![rank as f32 + 1.0; 1024];
+    const PER_RANK: usize = 1024;
+    const ROOT: usize = 0;
+
+    // Allreduce input: each rank contributes a constant vector of `rank+1`.
+    let mut allreduce_buf = vec![rank as f32 + 1.0; PER_RANK];
+
+    // Scatter input: at root, fill chunk `r` with the value `(r as f32) + 0.5`
+    // so each rank can verify it received its own chunk.
+    let scatter_send: Option<Vec<f32>> = if rank == ROOT {
+        Some(
+            (0..size)
+                .flat_map(|r| std::iter::repeat(r as f32 + 0.5).take(PER_RANK))
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let mut scatter_recv = vec![0.0_f32; PER_RANK];
 
     runtime.clone().run_with_name_and_runtime("coll_mpi_example", async move {
-        use pluvio_collective::Collective;
-        comm.allreduce::<Sum>(&mut buf).await.unwrap();
+        // --- Allreduce ---
+        comm.allreduce::<Sum>(&mut allreduce_buf).await.unwrap();
         // Expected sum = 1 + 2 + ... + size = size * (size + 1) / 2
         let expected = (size * (size + 1) / 2) as f32;
-        let max_abs_err = buf
+        let max_abs_err = allreduce_buf
             .iter()
             .map(|v| (v - expected).abs())
             .fold(0.0_f32, f32::max);
         println!(
-            "rank {}/{}: buf[0]={}, expected={}, max_abs_err={}",
-            rank, size, buf[0], expected, max_abs_err,
+            "[allreduce] rank {}/{}: buf[0]={}, expected={}, max_abs_err={}",
+            rank, size, allreduce_buf[0], expected, max_abs_err,
+        );
+
+        // --- Scatter ---
+        comm.scatter(scatter_send.as_deref(), &mut scatter_recv, ROOT)
+            .await
+            .unwrap();
+        let expected_chunk = rank as f32 + 0.5;
+        let scatter_err = scatter_recv
+            .iter()
+            .map(|v| (v - expected_chunk).abs())
+            .fold(0.0_f32, f32::max);
+        println!(
+            "[scatter ] rank {}/{}: recv[0]={}, expected={}, max_abs_err={}",
+            rank, size, scatter_recv[0], expected_chunk, scatter_err,
         );
     });
 
