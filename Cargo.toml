@@ -3,8 +3,9 @@ resolver = "3"
 members = [
     "pluvio_runtime",
     "pluvio_uring",
-    "pluvio_ucx", 
+    "pluvio_ucx",
     "pluvio_timer",
+    "pluvio_collective",
     "examples/ucx_example",
     "examples/uring_example",
     "examples/remoteio_example"
