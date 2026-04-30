@@ -89,6 +89,7 @@ where
             src: prev as u16,
             step: step as u16,
             phase: 0,
+            micro_chunk: 0,
         });
         let recv_target_bytes = bytemuck::cast_slice_mut::<T, u8>(tmp.as_mut_slice());
 
@@ -100,6 +101,7 @@ where
                 src: rank as u16,
                 step: step as u16,
                 phase: 0,
+                micro_chunk: 0,
             },
             key,
             recv_target_bytes,
@@ -141,11 +143,13 @@ where
                 src: rank as u16,
                 step: step as u16,
                 phase: 1,
+                micro_chunk: 0,
             },
             RecvKey::from(AmHeader {
                 src: prev as u16,
                 step: step as u16,
                 phase: 1,
+                micro_chunk: 0,
             }),
             recv_target_bytes,
         )

@@ -15,23 +15,26 @@ use pluvio_ucx::worker::am::AmStream;
 use crate::error::CollectiveError;
 
 /// Header that travels alongside every collective AM payload. Encodes the
-/// source rank and the protocol step / phase.
+/// source rank, the protocol step / phase, and (for pipelined collectives)
+/// the index of the micro-chunk within a single ring step.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AmHeader {
     pub src: u16,
     pub step: u16,
     pub phase: u8,
+    pub micro_chunk: u8,
 }
 
 impl AmHeader {
-    pub const BYTES: usize = 6;
+    pub const BYTES: usize = 8;
 
     pub fn encode(self) -> [u8; Self::BYTES] {
         let mut out = [0u8; Self::BYTES];
         out[0..2].copy_from_slice(&self.src.to_le_bytes());
         out[2..4].copy_from_slice(&self.step.to_le_bytes());
         out[4] = self.phase;
-        out[5] = 0; // reserved
+        out[5] = self.micro_chunk;
+        // bytes 6..8 reserved for future use.
         out
     }
 
@@ -46,6 +49,7 @@ impl AmHeader {
             src: u16::from_le_bytes([bytes[0], bytes[1]]),
             step: u16::from_le_bytes([bytes[2], bytes[3]]),
             phase: bytes[4],
+            micro_chunk: bytes[5],
         })
     }
 }
@@ -55,6 +59,7 @@ pub(crate) struct RecvKey {
     src: u16,
     step: u16,
     phase: u8,
+    micro_chunk: u8,
 }
 
 impl From<AmHeader> for RecvKey {
@@ -63,6 +68,7 @@ impl From<AmHeader> for RecvKey {
             src: h.src,
             step: h.step,
             phase: h.phase,
+            micro_chunk: h.micro_chunk,
         }
     }
 }
@@ -298,6 +304,7 @@ mod tests {
             src: 7,
             step: 3,
             phase: 1,
+            micro_chunk: 9,
         };
         let bytes = h.encode();
         let decoded = AmHeader::decode(&bytes).unwrap();
@@ -317,12 +324,32 @@ mod tests {
     }
 
     #[test]
+    fn micro_chunk_disambiguates_keys() {
+        let a = AmHeader {
+            src: 1,
+            step: 2,
+            phase: 0,
+            micro_chunk: 0,
+        };
+        let b = AmHeader {
+            src: 1,
+            step: 2,
+            phase: 0,
+            micro_chunk: 1,
+        };
+        let ka: RecvKey = a.into();
+        let kb: RecvKey = b.into();
+        assert_ne!(ka, kb);
+    }
+
+    #[test]
     fn early_arrival_then_recv() {
         let router = AmRouter::new();
         let h = AmHeader {
             src: 1,
             step: 0,
             phase: 0,
+            micro_chunk: 0,
         };
         let key: RecvKey = h.into();
         router.deliver(key, vec![1, 2, 3, 4]);
@@ -338,6 +365,7 @@ mod tests {
             src: 0,
             step: 5,
             phase: 1,
+            micro_chunk: 0,
         };
         let key: RecvKey = h.into();
 

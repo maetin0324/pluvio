@@ -94,6 +94,7 @@ where
             src: root as u16,
             step: root as u16,
             phase: PHASE_SCATTER,
+            micro_chunk: 0,
         }
         .encode();
 
@@ -130,6 +131,7 @@ where
             src: root as u16,
             step: root as u16,
             phase: PHASE_SCATTER,
+            micro_chunk: 0,
         });
         let target_bytes = bytemuck::cast_slice_mut::<T, u8>(recv_buf);
         RecvFuture::new(comm.router().clone(), key, target_bytes).await
