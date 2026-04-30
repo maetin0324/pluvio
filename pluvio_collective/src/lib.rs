@@ -37,6 +37,16 @@ pub trait Collective<T>: Communicator {
         Self: 'a,
         T: 'a;
 
+    type AllgatherFut<'a>: Future<Output = Result<(), CollectiveError>>
+    where
+        Self: 'a,
+        T: 'a;
+
+    type BroadcastFut<'a>: Future<Output = Result<(), CollectiveError>>
+    where
+        Self: 'a,
+        T: 'a;
+
     /// In-place allreduce: every rank ends up with the reduced value of `buf`
     /// across all ranks. The reduction operator is selected via the type
     /// parameter `O`.
@@ -54,4 +64,18 @@ pub trait Collective<T>: Communicator {
         recv_buf: &'a mut [T],
         root: usize,
     ) -> Self::ScatterFut<'a>;
+
+    /// Allgather: each rank contributes `send_buf` of length `L`; on return
+    /// every rank has `recv_buf[r * L .. (r+1) * L] = sender(r)`. `recv_buf`
+    /// must therefore be of length `L * size()`.
+    fn allgather<'a>(
+        &'a self,
+        send_buf: &'a [T],
+        recv_buf: &'a mut [T],
+    ) -> Self::AllgatherFut<'a>;
+
+    /// Broadcast: rank `root`'s `buf` is delivered to every other rank's
+    /// `buf`. At ranks other than `root`, `buf`'s incoming contents are
+    /// overwritten.
+    fn broadcast<'a>(&'a self, buf: &'a mut [T], root: usize) -> Self::BroadcastFut<'a>;
 }

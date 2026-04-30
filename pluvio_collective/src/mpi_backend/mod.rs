@@ -3,13 +3,17 @@
 //! Implements `Allreduce` by wrapping `MPI_Iallreduce` and driving completion
 //! through a dedicated `MpiReactor` registered on the Pluvio runtime.
 
+pub mod allgather;
 pub mod allreduce;
+pub mod broadcast;
 pub mod communicator;
 pub mod datatype;
 pub mod reactor;
 pub mod scatter;
 
+pub use allgather::AllgatherFuture;
 pub use allreduce::AllreduceFuture;
+pub use broadcast::BroadcastFuture;
 pub use communicator::MpiCommunicator;
 pub use datatype::MpiDatatype;
 pub use reactor::MpiReactor;

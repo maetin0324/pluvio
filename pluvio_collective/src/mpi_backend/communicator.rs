@@ -6,7 +6,9 @@ use mpi_sys::{MPI_Comm_rank, MPI_Comm_size, MPI_SUCCESS, RSMPI_COMM_WORLD as MPI
 
 use crate::communicator::Communicator;
 use crate::error::CollectiveError;
+use crate::mpi_backend::allgather::AllgatherFuture;
 use crate::mpi_backend::allreduce::AllreduceFuture;
+use crate::mpi_backend::broadcast::BroadcastFuture;
 use crate::mpi_backend::datatype::MpiDatatype;
 use crate::mpi_backend::reactor::MpiReactor;
 use crate::mpi_backend::scatter::ScatterFuture;
@@ -80,6 +82,18 @@ impl<T: MpiDatatype> Collective<T> for MpiCommunicator {
         Self: 'a,
         T: 'a;
 
+    type AllgatherFut<'a>
+        = Pin<Box<dyn Future<Output = Result<(), CollectiveError>> + 'a>>
+    where
+        Self: 'a,
+        T: 'a;
+
+    type BroadcastFut<'a>
+        = BroadcastFuture<'a, T>
+    where
+        Self: 'a,
+        T: 'a;
+
     fn allreduce<'a, O: Op<T>>(&'a self, buf: &'a mut [T]) -> Self::AllreduceFut<'a> {
         AllreduceFuture::new(self.reactor.clone(), buf, O::mpi_op())
     }
@@ -97,5 +111,22 @@ impl<T: MpiDatatype> Collective<T> for MpiCommunicator {
             let fut = ScatterFuture::new(reactor, send_buf, recv_buf, root, rank, size)?;
             fut.await
         })
+    }
+
+    fn allgather<'a>(
+        &'a self,
+        send_buf: &'a [T],
+        recv_buf: &'a mut [T],
+    ) -> Self::AllgatherFut<'a> {
+        let reactor = self.reactor.clone();
+        let size = self.size;
+        Box::pin(async move {
+            let fut = AllgatherFuture::new(reactor, send_buf, recv_buf, size)?;
+            fut.await
+        })
+    }
+
+    fn broadcast<'a>(&'a self, buf: &'a mut [T], root: usize) -> Self::BroadcastFut<'a> {
+        BroadcastFuture::new(self.reactor.clone(), buf, root)
     }
 }
