@@ -83,7 +83,12 @@ where
             .ok_or(CollectiveError::Protocol("rd: missing endpoint to peer"))?
             .clone();
 
-        let send_bytes: Vec<u8> = bytemuck::cast_slice::<T, u8>(buf).to_vec();
+        // SAFETY: send borrows `buf` immutably while recv writes `tmp` (disjoint).
+        // 借用は join().await の終了で解放され、その後の reduce で `buf` を mut 借用する。
+        let send_bytes_view: &[u8] = unsafe {
+            let ptr = buf.as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, std::mem::size_of_val(buf))
+        };
         let recv_target_bytes: &mut [u8] = bytemuck::cast_slice_mut::<T, u8>(&mut tmp);
 
         let send_header = AmHeader {
@@ -105,7 +110,7 @@ where
                 .am_send(
                     COLLECTIVE_AM_ID as u32,
                     &send_header,
-                    &send_bytes,
+                    send_bytes_view,
                     false,
                     // proto: None — UCX_RNDV_THRESH に基づく自動選択。
                     None,
@@ -118,10 +123,8 @@ where
         sr?;
         rr?;
 
-        // Local reduce into `buf`.
-        for (d, s) in buf.iter_mut().zip(tmp.iter()) {
-            *d = O::apply(*d, *s);
-        }
+        // Local reduce into `buf` (SIMD-friendly bulk path).
+        O::reduce_in_place(buf, &tmp);
     }
     Ok(())
 }

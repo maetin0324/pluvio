@@ -272,8 +272,13 @@ where
         // For phase 1 the only mutation is the local reduce on `recv_slot`
         // which is exclusive to micro-chunk `m`. Concurrent chains touch
         // different micro_chunks, never the same memory.
-        let send_bytes: Vec<u8> =
-            bytemuck::cast_slice::<T, u8>(unsafe { send_slot.as_slice() }).to_vec();
+        // send は send_slot を read-only で参照する borrow を流す (to_vec を
+        // 避けて zero-copy 化)。
+        let send_bytes_view: &[u8] = unsafe {
+            let s = send_slot.as_slice();
+            let ptr = s.as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, std::mem::size_of_val(s))
+        };
         let recv_target_bytes: &mut [u8] =
             bytemuck::cast_slice_mut::<T, u8>(unsafe { tmp_slot.as_slice_mut() });
 
@@ -298,7 +303,7 @@ where
                     .am_send(
                         COLLECTIVE_AM_ID as u32,
                         &send_header,
-                        &send_bytes,
+                        send_bytes_view,
                         false,
                         proto,
                     )
@@ -311,13 +316,11 @@ where
         sr?;
         rr?;
 
-        // Local reduce.
+        // Local reduce (SIMD-friendly bulk path).
         // SAFETY: `recv_slot` is unique to this chain in phase 1.
         let dst = unsafe { recv_slot.as_slice_mut() };
         let src = unsafe { tmp_slot.as_slice() };
-        for (d, s) in dst.iter_mut().zip(src.iter()) {
-            *d = O::apply(*d, *s);
-        }
+        O::reduce_in_place(dst, src);
     }
     Ok(())
 }
@@ -345,8 +348,11 @@ where
 
         // SAFETY: as above — chain `m` is the sole writer for the
         // `*_slot` rows it touches in phase 2.
-        let send_bytes: Vec<u8> =
-            bytemuck::cast_slice::<T, u8>(unsafe { send_slot.as_slice() }).to_vec();
+        let send_bytes_view: &[u8] = unsafe {
+            let s = send_slot.as_slice();
+            let ptr = s.as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, std::mem::size_of_val(s))
+        };
         let recv_target_bytes: &mut [u8] =
             bytemuck::cast_slice_mut::<T, u8>(unsafe { recv_slot.as_slice_mut() });
 
@@ -371,7 +377,7 @@ where
                     .am_send(
                         COLLECTIVE_AM_ID as u32,
                         &send_header,
-                        &send_bytes,
+                        send_bytes_view,
                         false,
                         proto,
                     )

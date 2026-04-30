@@ -82,7 +82,14 @@ where
         let recv_idx = (rank + n - step - 1) % n;
 
         let send_off = send_idx * chunk;
-        let send_bytes = bytemuck::cast_slice::<T, u8>(&buf[send_off..send_off + chunk]).to_vec();
+        // SAFETY: send borrows `buf[send_off..send_off+chunk]` immutably while
+        // recv writes into the disjoint `tmp` buffer. The borrow ends with
+        // `join().await` — the local reduce on `buf[recv_idx]` runs after.
+        // raw-ptr→slice 化することで borrow checker を黙らせつつ to_vec を回避。
+        let send_bytes_view: &[u8] = unsafe {
+            let ptr = buf[send_off..send_off + chunk].as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, chunk * std::mem::size_of::<T>())
+        };
 
         let key = RecvKey::from(AmHeader {
             src: prev as u16,
@@ -95,7 +102,7 @@ where
         run_send_recv(
             &next_ep,
             comm,
-            send_bytes,
+            send_bytes_view,
             AmHeader {
                 src: rank as u16,
                 step: step as u16,
@@ -109,9 +116,8 @@ where
 
         // Local reduce: buf[recv_idx] = O(buf[recv_idx], tmp)
         let recv_off = recv_idx * chunk;
-        for i in 0..chunk {
-            buf[recv_off + i] = O::apply(buf[recv_off + i], tmp[i]);
-        }
+        let dst = &mut buf[recv_off..recv_off + chunk];
+        O::reduce_in_place(dst, &tmp);
     }
 
     // Phase 2: allgather
@@ -120,14 +126,15 @@ where
         let recv_idx = (rank + n - step) % n;
 
         let send_off = send_idx * chunk;
-        let send_bytes = bytemuck::cast_slice::<T, u8>(&buf[send_off..send_off + chunk]).to_vec();
-
         let recv_off = recv_idx * chunk;
         // SAFETY: send and recv refer to disjoint chunks of `buf` (they cover
         // different `recv_idx` and `send_idx` slices since `n >= 2`).
-        // Constructing a separate &mut [u8] from raw pointers avoids the
-        // borrow checker complaining about simultaneously borrowing two
-        // disjoint slices of `buf`.
+        // raw-ptr→slice で disjoint な &[u8] / &mut [u8] を同時に作る。
+        // この借用は join().await の終了でリリースされる。
+        let send_bytes_view: &[u8] = unsafe {
+            let ptr = buf[send_off..send_off + chunk].as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, chunk * std::mem::size_of::<T>())
+        };
         let recv_target_bytes: &mut [u8] = unsafe {
             let ptr = buf[recv_off..recv_off + chunk].as_mut_ptr() as *mut u8;
             let len = chunk * std::mem::size_of::<T>();
@@ -137,7 +144,7 @@ where
         run_send_recv(
             &next_ep,
             comm,
-            send_bytes,
+            send_bytes_view,
             AmHeader {
                 src: rank as u16,
                 step: step as u16,
@@ -161,7 +168,7 @@ where
 async fn run_send_recv<'a>(
     next_ep: &Rc<pluvio_ucx::worker::endpoint::Endpoint>,
     comm: &'a UcxCommunicator,
-    send_bytes: Vec<u8>,
+    send_bytes: &'a [u8],
     send_header: AmHeader,
     recv_key: RecvKey,
     recv_target: &'a mut [u8],
@@ -173,7 +180,7 @@ async fn run_send_recv<'a>(
             .am_send(
                 COLLECTIVE_AM_ID as u32,
                 &header_bytes,
-                &send_bytes,
+                send_bytes,
                 false,
                 // proto: None で UCX に任せる。AmProto::Eager 強制だと大 msg で
                 // 内部 fragment 連送になり、256 KiB が 30 ms 超になる。

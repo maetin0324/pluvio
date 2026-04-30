@@ -480,7 +480,7 @@ impl Runtime {
 
             let idle_park_enabled = std::env::var("PLUVIO_IDLE_PARK")
                 .map(|v| v != "0")
-                .unwrap_or(true);
+                .unwrap_or(false);
             if idle_park_enabled && !task_completed_this_iter {
                 let idle_iter = self.idle_iter_count.get().wrapping_add(1);
                 self.idle_iter_count.set(idle_iter);

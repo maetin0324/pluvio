@@ -102,17 +102,24 @@ where
             if r == root {
                 continue;
             }
-            let payload =
-                bytemuck::cast_slice::<T, u8>(&sb[r * chunk..(r + 1) * chunk]).to_vec();
+            // SAFETY: `sb` (`send_buf` at root) は &[T] の borrow なので、
+            // 各 chunk の view を `&[u8]` として扱える。borrow は join_all().await
+            // 完了で解放される (戻る前に sb は使い続けるだけで mutate しない)。
+            let payload_view: &[u8] = unsafe {
+                let s = &sb[r * chunk..(r + 1) * chunk];
+                let ptr = s.as_ptr() as *const u8;
+                std::slice::from_raw_parts(ptr, std::mem::size_of_val(s))
+            };
             let ep = comm
                 .endpoint(r)
                 .ok_or(CollectiveError::Protocol("scatter: missing endpoint"))?
                 .clone();
+            let header_bytes_ref = &header_bytes;
             sends.push(async move {
                 ep.am_send(
                     COLLECTIVE_AM_ID as u32,
-                    &header_bytes,
-                    &payload,
+                    header_bytes_ref,
+                    payload_view,
                     false,
                     None, // UCX に Eager/Rndv 切替を任せる
                 )

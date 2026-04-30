@@ -87,14 +87,15 @@ where
         let send_off = 0;
         let recv_off = count;
 
-        let send_bytes: Vec<u8> = bytemuck::cast_slice::<T, u8>(
-            &recv_buf[send_off * l..(send_off + to_send) * l],
-        )
-        .to_vec();
-
         // SAFETY: send and recv refer to disjoint slot ranges of `recv_buf`
         // (`send_off=0..to_send` vs `recv_off=count..count+to_send`, and
-        // `to_send <= count` so they never overlap).
+        // `to_send <= count` so they never overlap). 両方 raw-ptr 経由で
+        // `&[u8]` / `&mut [u8]` を作り、send は zero-copy にする。
+        let send_bytes_view: &[u8] = unsafe {
+            let s = &recv_buf[send_off * l..(send_off + to_send) * l];
+            let ptr = s.as_ptr() as *const u8;
+            std::slice::from_raw_parts(ptr, std::mem::size_of_val(s))
+        };
         let recv_target_bytes: &mut [u8] = unsafe {
             let ptr = recv_buf[recv_off * l..(recv_off + to_send) * l].as_mut_ptr() as *mut u8;
             let byte_len = to_send * l * std::mem::size_of::<T>();
@@ -124,7 +125,7 @@ where
                 .am_send(
                     COLLECTIVE_AM_ID as u32,
                     &send_header,
-                    &send_bytes,
+                    send_bytes_view,
                     false,
                     None, // UCX に Eager/Rndv 切替を任せる
                 )

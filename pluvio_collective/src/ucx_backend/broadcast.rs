@@ -84,7 +84,12 @@ where
             let peer_logical = logical | mask;
             if peer_logical != logical && peer_logical < n {
                 let peer = (peer_logical + root) % n;
-                let send_bytes: Vec<u8> = bytemuck::cast_slice::<T, u8>(buf).to_vec();
+                // SAFETY: `buf` は &mut [T] だが、bcast の sender path では送るだけで
+                // mutate しない。borrow は am_send().await 完了で解放される。
+                let send_bytes_view: &[u8] = unsafe {
+                    let ptr = buf.as_ptr() as *const u8;
+                    std::slice::from_raw_parts(ptr, std::mem::size_of_val(buf))
+                };
                 let header = AmHeader {
                     src: rank as u16,
                     step: round as u16,
@@ -99,7 +104,7 @@ where
                 ep.am_send(
                     COLLECTIVE_AM_ID as u32,
                     &header,
-                    &send_bytes,
+                    send_bytes_view,
                     false,
                     None, // UCX に Eager/Rndv 切替を任せる
                 )

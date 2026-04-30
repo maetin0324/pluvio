@@ -15,6 +15,32 @@ pub trait Op<T>: Copy + 'static {
     fn apply(a: T, b: T) -> T;
     fn identity() -> T;
 
+    /// In-place バルク reduce: `dst[i] = apply(dst[i], src[i])`。
+    /// デフォルトは 8-way chunk_exact ループで、LLVM が AVX2/AVX-512 の
+    /// `vaddps` (Sum) や `vmaxps` (Max) を生成しやすい形にしてある。
+    /// 個別 Op で更に最適化したい場合は override できる。
+    #[inline]
+    fn reduce_in_place(dst: &mut [T], src: &[T])
+    where
+        T: Copy,
+    {
+        debug_assert_eq!(dst.len(), src.len());
+        const LANES: usize = 8;
+        let mut chunks_dst = dst.chunks_exact_mut(LANES);
+        let mut chunks_src = src.chunks_exact(LANES);
+        for (d, s) in (&mut chunks_dst).zip(&mut chunks_src) {
+            // 固定長 [T; 8] にすると LLVM が SIMD 8 wide で broadcast load + op + store。
+            for i in 0..LANES {
+                d[i] = Self::apply(d[i], s[i]);
+            }
+        }
+        let rd = chunks_dst.into_remainder();
+        let rs = chunks_src.remainder();
+        for (d, s) in rd.iter_mut().zip(rs.iter()) {
+            *d = Self::apply(*d, *s);
+        }
+    }
+
     /// Return the corresponding `MPI_Op` for the MPI backend.
     /// UCX backend does not consult this.
     #[cfg(feature = "mpi")]
