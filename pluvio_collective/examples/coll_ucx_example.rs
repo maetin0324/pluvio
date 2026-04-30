@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
         let scatter_send: Option<Vec<f32>> = if rank == ROOT {
             Some(
                 (0..size)
-                    .flat_map(|r| std::iter::repeat(r as f32 + 0.5).take(per_chunk))
+                    .flat_map(|r| std::iter::repeat_n(r as f32 + 0.5, per_chunk))
                     .collect(),
             )
         } else {

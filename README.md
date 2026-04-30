@@ -45,10 +45,11 @@ A small timer reactor used for `Delay`, `sleep`, and `timeout`. Drives a min-hea
 
 ### 5. pluvio_collective
 
-Non-blocking collective communication (`Allreduce`, `Scatter`) on top of the Pluvio reactor model. Two backends share one trait so application code can swap between them:
+Non-blocking collective communication (`Allreduce`, `Scatter`, `Allgather`, `Broadcast`) on top of the Pluvio reactor model. Two backends share one trait so application code can swap between them:
 
-- **`mpi_backend`**: wraps `MPI_Iallreduce` / `MPI_Iscatter` via `mpi-sys` and an `MpiReactor` that drains in-flight requests with `MPI_Test`
-- **`ucx_backend`**: ring allreduce and direct-send scatter on top of `pluvio_ucx` Active Messages, with TCP-based bootstrap of UCX worker addresses
+- **`mpi_backend`**: wraps `MPI_Iallreduce` / `MPI_Iscatter` / `MPI_Iallgather` / `MPI_Ibcast` via `mpi-sys` and an `MpiReactor` that drains in-flight requests with `MPI_Test`
+- **`ucx_backend`**: plain / pipelined / recursive-doubling allreduce, direct-send scatter, Bruck allgather, and binomial-tree broadcast on top of `pluvio_ucx` Active Messages, with TCP-based bootstrap of UCX worker addresses
+- **`AdaptiveCommunicator`**: wraps a `UcxCommunicator` and chooses the allreduce algorithm at call time based on message size and rank count
 
 See [`pluvio_collective/README.md`](pluvio_collective/README.md) for usage and limitations.
 
@@ -169,8 +170,10 @@ The repository ships several examples:
 - `examples/ucx_example`: UCX-based networking with Active Messages
 - `examples/remoteio_example`: combined io_uring + UCX remote I/O
 - `examples/mpi_example`: MPI + UCX remote READ benchmark (excluded from the workspace; build with `cargo build --manifest-path examples/mpi_example/Cargo.toml`)
-- `pluvio_collective/examples/coll_mpi_example.rs`: minimal MPI `Allreduce` driven by Pluvio
-- `pluvio_collective/examples/coll_ucx_example.rs`: ring allreduce on top of UCX AM
+- `pluvio_collective/examples/coll_mpi_example.rs`: minimal MPI `Allreduce` + `Scatter` driven by Pluvio
+- `pluvio_collective/examples/coll_ucx_example.rs`: ring allreduce + scatter on top of UCX AM
+- `pluvio_collective/examples/coll_ucx_pipelined.rs`: pipelined ring allreduce (Phase 3)
+- `pluvio_collective/examples/coll_adaptive.rs`: `AdaptiveCommunicator` with message-size-based algorithm selection
 
 Run the workspace examples directly:
 

@@ -45,7 +45,7 @@ run_one() {
     mpiexec -n "$PROCS" --oversubscribe \
         -x PLUVIO_COLL_ROOT_HOST=127.0.0.1 \
         -x PLUVIO_COLL_ROOT_PORT="$PORT" \
-        "$bin" --ignored --nocapture
+        "$bin" --ignored --nocapture --test-threads=1
 }
 
 run_one mpi_allreduce_2proc
@@ -55,4 +55,12 @@ PORT=$((PORT + 1))
 run_one cross_check
 PORT=$((PORT + 1))
 run_one scatter_2proc
+PORT=$((PORT + 1))
+run_one ucx_pipelined_allreduce_2proc
+PORT=$((PORT + 1))
+run_one ucx_recursive_doubling_2proc
+PORT=$((PORT + 1))
+run_one ucx_allgather_2proc
+PORT=$((PORT + 1))
+run_one ucx_broadcast_2proc
 echo "[run_integration_tests] all tests passed"

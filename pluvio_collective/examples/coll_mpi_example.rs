@@ -54,7 +54,7 @@ fn main() {
     let scatter_send: Option<Vec<f32>> = if rank == ROOT {
         Some(
             (0..size)
-                .flat_map(|r| std::iter::repeat(r as f32 + 0.5).take(PER_RANK))
+                .flat_map(|r| std::iter::repeat_n(r as f32 + 0.5, PER_RANK))
                 .collect(),
         )
     } else {

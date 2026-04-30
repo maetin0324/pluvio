@@ -29,3 +29,11 @@ required-features = ["mpi"]
 [[example]]
 name = "coll_ucx_example"
 required-features = ["ucx"]
+
+[[example]]
+name = "coll_ucx_pipelined"
+required-features = ["ucx"]
+
+[[example]]
+name = "coll_adaptive"
+required-features = ["ucx"]
