@@ -10,7 +10,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use futures::FutureExt;
-use pluvio_ucx::async_ucx::ucp::AmProto;
 
 use crate::Communicator;
 use crate::error::CollectiveError;
@@ -176,7 +175,9 @@ async fn run_send_recv<'a>(
                 &header_bytes,
                 &send_bytes,
                 false,
-                Some(AmProto::Eager),
+                // proto: None で UCX に任せる。AmProto::Eager 強制だと大 msg で
+                // 内部 fragment 連送になり、256 KiB が 30 ms 超になる。
+                None,
             )
             .await
             .map_err(|e| CollectiveError::Ucx(format!("am_send: {:?}", e)))

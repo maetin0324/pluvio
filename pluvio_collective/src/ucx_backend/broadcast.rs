@@ -7,7 +7,6 @@
 use std::pin::Pin;
 
 use futures::FutureExt;
-use pluvio_ucx::async_ucx::ucp::AmProto;
 
 use crate::Communicator;
 use crate::error::CollectiveError;
@@ -102,7 +101,7 @@ where
                     &header,
                     &send_bytes,
                     false,
-                    Some(AmProto::Eager),
+                    None, // UCX に Eager/Rndv 切替を任せる
                 )
                 .await
                 .map_err(|e| CollectiveError::Ucx(format!("am_send: {:?}", e)))?;

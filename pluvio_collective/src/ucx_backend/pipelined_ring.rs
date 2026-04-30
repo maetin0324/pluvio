@@ -34,8 +34,11 @@ pub struct PipelineConfig {
     /// backpressure knob — too low under-pipelines, too high stresses the AM
     /// router and UCX request pool.
     pub max_in_flight: usize,
-    /// AM protocol hint passed to UCX. `Eager` gives the lowest CPU overhead
-    /// for typical micro-chunks (KiB-scale).
+    /// AM protocol hint passed to UCX. `None` で UCX に Eager/Rndv 切替を任せる
+    /// (UCX_RNDV_THRESH 経由)。`Some(AmProto::Eager)` を強制すると ~64 KiB を
+    /// 越えた micro_chunk で UCX が MTU サイズの fragment 連送に分解し、各
+    /// fragment で ack 待ちが入るため極端に遅くなる (256 KiB allreduce が
+    /// ~30 ms / 287×)。
     pub proto: Option<AmProto>,
 }
 
@@ -44,7 +47,7 @@ impl Default for PipelineConfig {
         Self {
             micro_chunks: 4,
             max_in_flight: 8,
-            proto: Some(AmProto::Eager),
+            proto: None,
         }
     }
 }
