@@ -1,4 +1,4 @@
-//! Recursive-doubling allreduce.
+//! Recursive-doubling allreduce on UCX **tag-matched** messaging.
 //!
 //! For `n = 2^k` ranks: `log2(n)` rounds of pairwise exchange, each rank
 //! exchanges with the peer at distance `2^r` and locally reduces the result
@@ -9,6 +9,7 @@
 //! Rabenseifner-style reduction needed to handle the residue is out of scope
 //! for this phase.
 
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 
 use futures::FutureExt;
@@ -16,11 +17,11 @@ use futures::FutureExt;
 use crate::Communicator;
 use crate::error::CollectiveError;
 use crate::op::Op;
-use crate::ucx_backend::am_router::{AmHeader, RecvFuture, RecvKey};
-use crate::ucx_backend::communicator::{COLLECTIVE_AM_ID, UcxCommunicator};
+use crate::ucx_backend::communicator::UcxCommunicator;
 use crate::ucx_backend::ring::ring_allreduce_typed;
+use crate::ucx_backend::tag::encode_tag;
 
-/// Phase byte used by the recursive-doubling AM headers; distinct from the
+/// Phase byte used by the recursive-doubling tag headers; distinct from the
 /// ring (0/1) and scatter (2) phases.
 const PHASE_RD: u8 = 3;
 
@@ -89,37 +90,40 @@ where
             let ptr = buf.as_ptr() as *const u8;
             std::slice::from_raw_parts(ptr, std::mem::size_of_val(buf))
         };
-        let recv_target_bytes: &mut [u8] = bytemuck::cast_slice_mut::<T, u8>(&mut tmp);
-
-        let send_header = AmHeader {
-            src: rank as u16,
-            step: r as u16,
-            phase: PHASE_RD,
-            micro_chunk: 0,
-        }
-        .encode();
-        let recv_key = RecvKey::from(AmHeader {
-            src: peer as u16,
-            step: r as u16,
-            phase: PHASE_RD,
-            micro_chunk: 0,
-        });
-
-        let send_fut = async move {
-            peer_ep
-                .am_send(
-                    COLLECTIVE_AM_ID as u32,
-                    &send_header,
-                    send_bytes_view,
-                    false,
-                    // proto: None — UCX_RNDV_THRESH に基づく自動選択。
-                    None,
-                )
-                .await
-                .map_err(|e| CollectiveError::Ucx(format!("am_send: {:?}", e)))
+        // `tmp` を直接 MaybeUninit ビューに reborrow し、二重借用を避ける。
+        // SAFETY: `MaybeUninit<u8>` は `u8` 同等の repr。`tmp: &mut Vec<T>` は
+        // この slice 借用が活きている間使われない。
+        let recv_target_uninit: &mut [MaybeUninit<u8>] = unsafe {
+            let p = tmp.as_mut_ptr() as *mut MaybeUninit<u8>;
+            let len = std::mem::size_of_val::<[T]>(&tmp[..]);
+            std::slice::from_raw_parts_mut(p, len)
         };
-        let recv_fut = RecvFuture::new(comm.router().clone(), recv_key, recv_target_bytes);
-        let (sr, rr) = futures::future::join(send_fut, recv_fut).await;
+
+        let send_tag = encode_tag(rank, r as u16, PHASE_RD, 0);
+        let recv_tag = encode_tag(peer, r as u16, PHASE_RD, 0);
+
+        // ring.rs と同じ理由で、join 全体を 1 回の activate でラップする。
+        let worker = comm.worker();
+        worker.activate();
+        let send_fut = async {
+            peer_ep
+                .endpoint
+                .tag_send(send_tag, send_bytes_view)
+                .await
+                .map(|_| ())
+                .map_err(|e| CollectiveError::Ucx(format!("tag_send: {:?}", e)))
+        };
+        let recv_fut = async {
+            worker
+                .inner()
+                .tag_recv(recv_tag, recv_target_uninit)
+                .await
+                .map(|_| ())
+                .map_err(|e| CollectiveError::Ucx(format!("tag_recv: {:?}", e)))
+        };
+        let join_res = futures::future::join(send_fut, recv_fut).await;
+        worker.deactivate();
+        let (sr, rr) = join_res;
         sr?;
         rr?;
 

@@ -1,11 +1,20 @@
-//! Ring allreduce on top of `pluvio_ucx` Active Messages.
+//! Ring allreduce on top of UCX **tag-matched** messaging.
 //!
 //! Two phases of `n - 1` steps each (n = communicator size):
 //! - reduce-scatter: each rank ends up owning the reduced value of one chunk.
 //! - allgather: that chunk is forwarded around the ring.
 //!
 //! Send and receive of each step run concurrently via `futures::join`.
+//!
+//! 旧 AM-router 経路 (`am_send` + `RecvFuture` + HashMap dispatch) を廃止し、
+//! UCX のタグマッチング (`tag_send` / `tag_recv`) に直接乗せる:
+//!   - 受信側が事前に buffer を post できるため zero-copy RDMA put/get に乗りやすい
+//!   - HW tag matching (Mellanox CX-5+) の恩恵
+//!   - per-message router HashMap dispatch のオーバーヘッドが消える
+//!
+//! 64-bit タグの組み立ては `super::tag::encode_tag` 参照。
 
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -14,8 +23,8 @@ use futures::FutureExt;
 use crate::Communicator;
 use crate::error::CollectiveError;
 use crate::op::Op;
-use crate::ucx_backend::am_router::{AmHeader, RecvFuture, RecvKey};
-use crate::ucx_backend::communicator::{COLLECTIVE_AM_ID, UcxCommunicator};
+use crate::ucx_backend::communicator::UcxCommunicator;
+use crate::ucx_backend::tag::encode_tag;
 
 /// Boxed allreduce future. The body is non-trivial (multiple await points) so
 /// we erase the concrete `async` block type behind a Box for the GAT.
@@ -85,36 +94,27 @@ where
         // SAFETY: send borrows `buf[send_off..send_off+chunk]` immutably while
         // recv writes into the disjoint `tmp` buffer. The borrow ends with
         // `join().await` — the local reduce on `buf[recv_idx]` runs after.
-        // raw-ptr→slice 化することで borrow checker を黙らせつつ to_vec を回避。
         let send_bytes_view: &[u8] = unsafe {
             let ptr = buf[send_off..send_off + chunk].as_ptr() as *const u8;
             std::slice::from_raw_parts(ptr, chunk * std::mem::size_of::<T>())
         };
 
-        let key = RecvKey::from(AmHeader {
-            src: prev as u16,
-            step: step as u16,
-            phase: 0,
-            micro_chunk: 0,
-        });
+        let send_tag = encode_tag(rank, step as u16, /*phase=*/ 0, 0);
+        let recv_tag = encode_tag(prev, step as u16, /*phase=*/ 0, 0);
+
         let recv_target_bytes = bytemuck::cast_slice_mut::<T, u8>(tmp.as_mut_slice());
 
         run_send_recv(
             &next_ep,
             comm,
             send_bytes_view,
-            AmHeader {
-                src: rank as u16,
-                step: step as u16,
-                phase: 0,
-                micro_chunk: 0,
-            },
-            key,
+            send_tag,
+            recv_tag,
             recv_target_bytes,
         )
         .await?;
 
-        // Local reduce: buf[recv_idx] = O(buf[recv_idx], tmp)
+        // Local reduce: buf[recv_idx] = O(buf[recv_idx], tmp)  (SIMD-friendly)
         let recv_off = recv_idx * chunk;
         let dst = &mut buf[recv_off..recv_off + chunk];
         O::reduce_in_place(dst, &tmp);
@@ -129,8 +129,6 @@ where
         let recv_off = recv_idx * chunk;
         // SAFETY: send and recv refer to disjoint chunks of `buf` (they cover
         // different `recv_idx` and `send_idx` slices since `n >= 2`).
-        // raw-ptr→slice で disjoint な &[u8] / &mut [u8] を同時に作る。
-        // この借用は join().await の終了でリリースされる。
         let send_bytes_view: &[u8] = unsafe {
             let ptr = buf[send_off..send_off + chunk].as_ptr() as *const u8;
             std::slice::from_raw_parts(ptr, chunk * std::mem::size_of::<T>())
@@ -141,22 +139,15 @@ where
             std::slice::from_raw_parts_mut(ptr, len)
         };
 
+        let send_tag = encode_tag(rank, step as u16, /*phase=*/ 1, 0);
+        let recv_tag = encode_tag(prev, step as u16, /*phase=*/ 1, 0);
+
         run_send_recv(
             &next_ep,
             comm,
             send_bytes_view,
-            AmHeader {
-                src: rank as u16,
-                step: step as u16,
-                phase: 1,
-                micro_chunk: 0,
-            },
-            RecvKey::from(AmHeader {
-                src: prev as u16,
-                step: step as u16,
-                phase: 1,
-                micro_chunk: 0,
-            }),
+            send_tag,
+            recv_tag,
             recv_target_bytes,
         )
         .await?;
@@ -165,34 +156,57 @@ where
     Ok(())
 }
 
+/// `&mut [u8]` を `&mut [MaybeUninit<u8>]` として再借用 (reborrow)。
+/// 関数境界での mutable reborrow なので、呼び出し側の `&mut [u8]` は
+/// 戻り値の lifetime 内で使えなくなる (=aliasing UB を回避)。
+#[inline]
+fn as_uninit_mut(s: &mut [u8]) -> &mut [MaybeUninit<u8>] {
+    let len = s.len();
+    let ptr = s.as_mut_ptr() as *mut MaybeUninit<u8>;
+    // SAFETY: `MaybeUninit<u8>` は `u8` と同じ表現を持ち、aliasing 制約も同じ。
+    // 元の `s: &mut [u8]` は consume され、戻り値 `&mut [MaybeUninit<u8>]` のみが
+    // 当該領域に対する exclusive borrow となる。
+    unsafe { std::slice::from_raw_parts_mut(ptr, len) }
+}
+
 async fn run_send_recv<'a>(
     next_ep: &Rc<pluvio_ucx::worker::endpoint::Endpoint>,
     comm: &'a UcxCommunicator,
     send_bytes: &'a [u8],
-    send_header: AmHeader,
-    recv_key: RecvKey,
+    send_tag: u64,
+    recv_tag: u64,
     recv_target: &'a mut [u8],
 ) -> Result<(), CollectiveError> {
-    let header_bytes = send_header.encode();
+    // pluvio_ucx::Endpoint::tag_send / Worker::tag_recv は内部で activate/deactivate
+    // を呼ぶが、両者を `join` で並走すると先に完了した方が deactivate を打ち、
+    // reactor の active counter が一時的に 0 になる race がある (state 遷移ベース、
+    // 操作カウントではない)。これにより未完了の recv 側で polling が止まり SIGSEGV
+    // になる。回避策: 並走範囲を 1 回の activate でラップし、内部 async-ucx API
+    // (`endpoint.endpoint.tag_send`, `worker.inner().tag_recv`) を直接呼ぶ。
+    let worker = comm.worker();
+    worker.activate();
 
-    let send_fut = async move {
+    let send_fut = async {
         next_ep
-            .am_send(
-                COLLECTIVE_AM_ID as u32,
-                &header_bytes,
-                send_bytes,
-                false,
-                // proto: None で UCX に任せる。AmProto::Eager 強制だと大 msg で
-                // 内部 fragment 連送になり、256 KiB が 30 ms 超になる。
-                None,
-            )
+            .endpoint
+            .tag_send(send_tag, send_bytes)
             .await
-            .map_err(|e| CollectiveError::Ucx(format!("am_send: {:?}", e)))
+            .map(|_| ())
+            .map_err(|e| CollectiveError::Ucx(format!("tag_send: {:?}", e)))
+    };
+    let recv_target_uninit = as_uninit_mut(recv_target);
+    let recv_fut = async {
+        worker
+            .inner()
+            .tag_recv(recv_tag, recv_target_uninit)
+            .await
+            .map(|_| ())
+            .map_err(|e| CollectiveError::Ucx(format!("tag_recv: {:?}", e)))
     };
 
-    let recv_fut = RecvFuture::new(comm.router().clone(), recv_key, recv_target);
-
-    let (send_res, recv_res) = futures::future::join(send_fut, recv_fut).await;
+    let join_res = futures::future::join(send_fut, recv_fut).await;
+    worker.deactivate();
+    let (send_res, recv_res) = join_res;
     send_res?;
     recv_res?;
     Ok(())

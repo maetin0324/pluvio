@@ -10,6 +10,7 @@ pub mod pipelined_ring;
 pub mod recursive_doubling;
 pub mod ring;
 pub mod scatter;
+pub mod tag;
 pub(crate) mod util;
 
 pub use am_router::AmRouter;
