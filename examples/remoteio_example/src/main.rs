@@ -225,7 +225,8 @@ async fn write_task(file: Rc<DmaFile>, offset: usize, mut msg: AmMsg) -> anyhow:
     let buf_ref = buffer.as_mut_slice();
     msg.recv_data_single(buf_ref).await.unwrap();
 
-    file.write_fixed(buffer, offset as u64).await?;
+    let len = buffer.len() as u32;
+    file.write_fixed(buffer, offset as u64, len).await?;
 
     unsafe {
         msg.reply(RESPONSE_ID, &[], &[], false, None).await.unwrap();

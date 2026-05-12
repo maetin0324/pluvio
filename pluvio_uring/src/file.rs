@@ -69,6 +69,12 @@ impl DmaFile {
 
     /// Perform a `ReadFixed` using a pre-registered buffer.
     ///
+    /// `len` is the number of bytes to request from the kernel. It must be
+    /// `<= buffer.len()`; pass the buffer's full capacity to read as much as
+    /// will fit. When the file is opened with `O_DIRECT`, `len` must also be a
+    /// multiple of the device block size — non-aligned `len` callers should
+    /// open the file as buffered I/O instead.
+    ///
     /// Returns a tuple of (bytes_read, buffer) so the caller can access
     /// the data read into the buffer.
     #[async_backtrace::framed]
@@ -77,12 +83,19 @@ impl DmaFile {
         &self,
         buffer: FixedBuffer,
         offset: u64,
+        len: u32,
     ) -> std::io::Result<(i32, FixedBuffer)> {
+        debug_assert!(
+            len as usize <= buffer.len(),
+            "read_fixed len ({}) must be <= buffer.len() ({})",
+            len,
+            buffer.len(),
+        );
         let fd = self.file.as_raw_fd();
         let sqe = io_uring::opcode::ReadFixed::new(
             io_uring::types::Fd(fd),
             buffer.as_ptr() as *mut u8,
-            buffer.len() as u32,
+            len,
             buffer.index() as u16,
         )
         .offset(offset)
@@ -94,6 +107,11 @@ impl DmaFile {
 
     /// Perform a `WriteFixed` using a pre-registered buffer.
     ///
+    /// `len` is the number of bytes to write. It must be `<= buffer.len()`.
+    /// When the file is opened with `O_DIRECT`, `len` must also be a multiple
+    /// of the device block size — non-aligned `len` callers should open the
+    /// file as buffered I/O instead.
+    ///
     /// Returns a tuple of (bytes_written, buffer) so the caller can
     /// reuse the buffer if needed.
     #[async_backtrace::framed]
@@ -102,13 +120,20 @@ impl DmaFile {
         &self,
         buffer: FixedBuffer,
         offset: u64,
+        len: u32,
     ) -> std::io::Result<(i32, FixedBuffer)> {
+        debug_assert!(
+            len as usize <= buffer.len(),
+            "write_fixed len ({}) must be <= buffer.len() ({})",
+            len,
+            buffer.len(),
+        );
         let fd = self.file.as_raw_fd();
         let sqe = {
             io_uring::opcode::WriteFixed::new(
                 io_uring::types::Fd(fd),
                 buffer.as_ptr(),
-                buffer.len() as u32,
+                len,
                 buffer.index() as u16,
             )
             .offset(offset)

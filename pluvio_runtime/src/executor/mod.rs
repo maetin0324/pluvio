@@ -8,7 +8,7 @@ pub mod spsc;
 pub mod stat;
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     collections::HashMap,
     future::Future,
     rc::Rc,
@@ -100,7 +100,11 @@ pub struct Runtime {
 
 // Thread-local storage for the runtime
 thread_local! {
-    pub static RUNTIME: OnceCell<Rc<Runtime>> = OnceCell::new();
+    // RefCell so that clients which run multiple BenchFS init/finalize cycles
+    // on the same thread (e.g. io500 invoking IOR for write then read) can
+    // replace and clear the runtime. OnceCell only allowed a single set,
+    // which panicked the second call.
+    pub static RUNTIME: RefCell<Option<Rc<Runtime>>> = const { RefCell::new(None) };
 }
 
 
@@ -989,23 +993,23 @@ impl Runtime {
 
 // TLS-based convenience functions
 
-/// Set the thread-local runtime that will be used by TLS-based APIs.
+/// Set the thread-local runtime. Replaces any previous runtime on this thread.
 pub fn set_runtime(runtime: Rc<Runtime>) {
     RUNTIME.with(|r| {
-        r.set(runtime).unwrap_or_else(|_| panic!("Failed to set runtime"));
+        *r.borrow_mut() = Some(runtime);
     });
 }
 
 /// Get a clone of the thread-local runtime.
 pub fn get_runtime() -> Option<Rc<Runtime>> {
-    RUNTIME.with(|r| r.get().cloned())
+    RUNTIME.with(|r| r.borrow().clone())
 }
 
-/// Clear the thread-local runtime. 
+/// Clear the thread-local runtime.
 pub fn clear_runtime() {
-    // RUNTIME.with(|r| {
-    //     r.clear();
-    // });
+    RUNTIME.with(|r| {
+        *r.borrow_mut() = None;
+    });
 }
 
 

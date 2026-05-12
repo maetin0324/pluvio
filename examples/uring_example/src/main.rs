@@ -86,7 +86,8 @@ fn main() {
                 let offset = (next_block * BUFFER_SIZE) as u64;
                 let handle = pluvio_runtime::spawn_with_name(
                     async move {
-                        file.write_fixed(buffer, offset)
+                        let len = buffer.len() as u32;
+                        file.write_fixed(buffer, offset, len)
                             .await
                             .map(|(bytes, _buf)| bytes)
                     },
@@ -105,7 +106,8 @@ fn main() {
                     let offset = (next_block * BUFFER_SIZE) as u64;
                     let handle = pluvio_runtime::spawn_with_name(
                         async move {
-                            file.write_fixed(buffer, offset)
+                            let len = buffer.len() as u32;
+                            file.write_fixed(buffer, offset, len)
                                 .await
                                 .map(|(bytes, _buf)| bytes)
                         },
@@ -139,7 +141,8 @@ fn main() {
                 let offset = (next_block * BUFFER_SIZE) as u64;
                 let handle = pluvio_runtime::spawn_with_name(
                     async move {
-                        file.read_fixed(buffer, offset)
+                        let len = buffer.len() as u32;
+                        file.read_fixed(buffer, offset, len)
                             .await
                             .map(|(bytes, _buf)| bytes)
                     },
@@ -158,7 +161,8 @@ fn main() {
                     let offset = (next_block * BUFFER_SIZE) as u64;
                     let handle = pluvio_runtime::spawn_with_name(
                         async move {
-                            file.read_fixed(buffer, offset)
+                            let len = buffer.len() as u32;
+                            file.read_fixed(buffer, offset, len)
                                 .await
                                 .map(|(bytes, _buf)| bytes)
                         },
@@ -183,10 +187,12 @@ fn main() {
 
 #[async_backtrace::framed]
 async fn read_fixed(buffer: pluvio_uring::allocator::FixedBuffer, offset: u64, file: DmaFile) -> Result<(i32, pluvio_uring::allocator::FixedBuffer), std::io::Error> {
-    file.read_fixed(buffer, offset).await
+    let len = buffer.len() as u32;
+    file.read_fixed(buffer, offset, len).await
 }
 
 #[async_backtrace::framed]
 async fn write_fixed(buffer: pluvio_uring::allocator::FixedBuffer, offset: u64, file: DmaFile) -> Result<(i32, pluvio_uring::allocator::FixedBuffer), std::io::Error> {
-    file.write_fixed(buffer, offset).await
+    let len = buffer.len() as u32;
+    file.write_fixed(buffer, offset, len).await
 }

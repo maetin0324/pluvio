@@ -362,7 +362,8 @@ async fn run_server(
         buf_slice.fill(pattern);
 
         let offset = i * data_size;
-        dma_file.write_fixed(buffer, offset as u64).await?;
+        let len = buffer.len() as u32;
+        dma_file.write_fixed(buffer, offset as u64, len).await?;
     }
 
     let write_elapsed = write_start.elapsed();
@@ -445,7 +446,8 @@ async fn run_server(
         // Read from file
         let io_start = Instant::now();
         let buffer = dma_file.acquire_buffer().await;
-        let (_bytes_read, mut buffer) = dma_file.read_fixed(buffer, offset as u64).await?;
+        let len = buffer.len() as u32;
+        let (_bytes_read, mut buffer) = dma_file.read_fixed(buffer, offset as u64, len).await?;
         let io_elapsed = io_start.elapsed();
         total_io_time_us += io_elapsed.as_micros() as u64;
 
