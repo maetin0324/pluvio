@@ -90,18 +90,9 @@ impl FixedBufferAllocator {
     /// The buffers are registered with the provided `ring` as iovecs.
     #[tracing::instrument(level = "trace", skip(ring))]
     pub fn new(queue_size: usize, buffer_size: usize, ring: &mut IoUring) -> Rc<Self> {
-        let queue_size = queue_size;
-        let mut buffers = Vec::with_capacity(queue_size);
-        let page_size = page_size();
-        for i in 0..queue_size {
-            let buf = new_aligned_buffer(page_size, buffer_size);
-            let fixed_buf = FixedBufferInner {
-                buffer: ManuallyDrop::new(buf),
-                index: i,
-            };
-            buffers.push(fixed_buf);
-        }
-        // Build iovecs from the preallocated buffers.
+        let allocator = Self::new_without_uring(queue_size, buffer_size);
+        // Build iovecs from the preallocated buffers and register with io_uring.
+        let buffers = allocator.buffers.borrow();
         let iovecs: Vec<iovec> = buffers
             .iter()
             .map(|fixed_buf| {
@@ -112,17 +103,71 @@ impl FixedBufferAllocator {
                 }
             })
             .collect();
-        // Register the buffers with io_uring.
         unsafe {
             ring.submitter()
                 .register_buffers(&iovecs)
                 .expect("Failed to register buffers");
         }
+        drop(buffers);
+        allocator
+    }
 
+    /// Allocates `queue_size` page-aligned buffers of `buffer_size` bytes each
+    /// **without** registering them with io_uring.
+    ///
+    /// Useful when the buffers need to be shared with another subsystem that
+    /// also wants to pin them (e.g. RDMA via `register_rdma_keys`) before
+    /// io_uring takes them — or when io_uring registration is not needed
+    /// at all (pure RDMA pool).
+    ///
+    /// Memory layout is identical to [`Self::new`], so a follow-up
+    /// `io_uring::Submitter::register_buffers` call against the iovecs
+    /// returned by [`Self::iovecs`] (TODO if needed) is equivalent.
+    pub fn new_without_uring(queue_size: usize, buffer_size: usize) -> Rc<Self> {
+        let mut buffers = Vec::with_capacity(queue_size);
+        let page_size = page_size();
+        for i in 0..queue_size {
+            let buf = new_aligned_buffer(page_size, buffer_size);
+            buffers.push(FixedBufferInner {
+                buffer: ManuallyDrop::new(buf),
+                index: i,
+                rdma_lkey: 0,
+                rdma_rkey: 0,
+            });
+        }
         Rc::new(FixedBufferAllocator {
             buffers: RefCell::new(buffers),
             acquire_queue: RefCell::new(VecDeque::new()),
         })
+    }
+
+    /// Apply RDMA registration to every buffer in the pool.
+    ///
+    /// `register_fn(ptr, len)` is called once per buffer and must return
+    /// `(lkey, rkey)` for that buffer's MR. The caller is responsible for
+    /// keeping the resulting `MemoryRegion` (or equivalent) alive for the
+    /// lifetime of this allocator — pluvio_uring intentionally does not
+    /// depend on any RDMA library, so the MR lifetime sits with the caller.
+    ///
+    /// After this call, [`FixedBuffer::rdma_lkey`] / [`FixedBuffer::rdma_rkey`]
+    /// return the registered keys for the buffer.
+    ///
+    /// All buffers must be free (none currently lent out). This is
+    /// expected to be called once, immediately after construction.
+    pub fn register_rdma_keys<E, F>(&self, mut register_fn: F) -> Result<(), E>
+    where
+        F: FnMut(*mut u8, usize) -> Result<(u32, u32), E>,
+    {
+        let mut buffers = self.buffers.borrow_mut();
+        for buf in buffers.iter_mut() {
+            let slice = buf.as_slice();
+            let ptr = slice.as_ptr() as *mut u8;
+            let len = slice.len();
+            let (lkey, rkey) = register_fn(ptr, len)?;
+            buf.rdma_lkey = lkey;
+            buf.rdma_rkey = rkey;
+        }
+        Ok(())
     }
 
     /// Acquires an available buffer. Returns a WriteFixedBuffer handle.
@@ -131,6 +176,12 @@ impl FixedBufferAllocator {
     #[tracing::instrument(level = "trace", skip(self))]
     pub async fn acquire(self: &Rc<Self>) -> FixedBuffer {
         LazyAcquire::new(Rc::clone(self)).await
+    }
+
+    /// Try to acquire a buffer without waiting. Returns `None` if the pool
+    /// is empty.
+    pub fn try_acquire(self: &Rc<Self>) -> Option<FixedBuffer> {
+        self.acquire_inner()
     }
 
     /// Try to acquire a buffer without waiting.
@@ -215,14 +266,21 @@ pub struct FixedBuffer {
 pub struct FixedBufferInner {
     pub buffer: ManuallyDrop<AlignedBox<[u8]>>,
     pub index: usize,
+    /// Optional RDMA registration keys.
+    ///
+    /// Set by [`FixedBufferAllocator::register_rdma_keys`]; zero when the
+    /// buffer has not been registered with an HCA. The lifetime of the
+    /// underlying MR is owned by the caller of `register_rdma_keys`.
+    pub rdma_lkey: u32,
+    pub rdma_rkey: u32,
 }
 
 impl FixedBufferInner {
-    fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         &**self.buffer
     }
 
-    fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut **self.buffer
     }
 }
@@ -258,6 +316,26 @@ impl FixedBuffer {
         self.buffer
             .as_mut()
             .map_or(&mut [], |buf| buf.as_mut_slice())
+    }
+
+    /// Raw mutable pointer to the buffer's start, callable with `&self`.
+    ///
+    /// Safe to obtain (the AlignedBox memory is pinned by `ManuallyDrop`),
+    /// but caller must not race writes via this pointer with `as_mut_slice`
+    /// readers. Intended for handing the buffer address to subsystems that
+    /// will write into it asynchronously (RDMA HCA, io_uring kernel).
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.as_ptr() as *mut u8
+    }
+
+    /// RDMA local key for this buffer (0 if never RDMA-registered).
+    pub fn rdma_lkey(&self) -> u32 {
+        self.buffer.as_ref().map_or(0, |b| b.rdma_lkey)
+    }
+
+    /// RDMA remote key for this buffer (0 if never RDMA-registered).
+    pub fn rdma_rkey(&self) -> u32 {
+        self.buffer.as_ref().map_or(0, |b| b.rdma_rkey)
     }
 }
 
