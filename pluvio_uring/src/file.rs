@@ -144,6 +144,60 @@ impl DmaFile {
         result.map(|bytes_written| (bytes_written, buffer))
     }
 
+    /// `write_fixed` variant that does not take ownership of a `FixedBuffer`.
+    /// The caller supplies the registered buffer's (ptr, len, io_uring fixed
+    /// buffer index) directly. Useful when the underlying buffer is held by
+    /// another subsystem (e.g. an `Arc<FixedBuffer>` reachable from RDMA
+    /// transport state) and ownership transfer is impractical.
+    ///
+    /// # Safety
+    /// `ptr` must point to a buffer that was registered with this
+    /// `IoUringReactor` via `register_buffers`, and `buf_index` must be the
+    /// 0-based slot the kernel knows it as. `len` must be ≤ the registered
+    /// buffer's size, and the memory must stay valid until the SQE
+    /// completes.
+    #[async_backtrace::framed]
+    pub async fn write_fixed_raw(
+        &self,
+        offset: u64,
+        ptr: *const u8,
+        len: u32,
+        buf_index: u16,
+    ) -> std::io::Result<i32> {
+        let fd = self.file.as_raw_fd();
+        let sqe = io_uring::opcode::WriteFixed::new(
+            io_uring::types::Fd(fd),
+            ptr,
+            len,
+            buf_index,
+        )
+        .offset(offset)
+        .build();
+        self.reactor.push_sqe(sqe).await
+    }
+
+    /// `read_fixed` variant that does not take ownership of a `FixedBuffer`.
+    /// See [`write_fixed_raw`] for safety requirements.
+    #[async_backtrace::framed]
+    pub async fn read_fixed_raw(
+        &self,
+        offset: u64,
+        ptr: *mut u8,
+        len: u32,
+        buf_index: u16,
+    ) -> std::io::Result<i32> {
+        let fd = self.file.as_raw_fd();
+        let sqe = io_uring::opcode::ReadFixed::new(
+            io_uring::types::Fd(fd),
+            ptr,
+            len,
+            buf_index,
+        )
+        .offset(offset)
+        .build();
+        self.reactor.push_sqe(sqe).await
+    }
+
     #[async_backtrace::framed]
     #[tracing::instrument(level = "trace", skip(self))]
     pub async fn fallocate(&self, size: u64) -> std::io::Result<i32> {
