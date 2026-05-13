@@ -102,17 +102,38 @@ impl<T> Inner<T> {
         }
     }
 
+    /// Authoritative buffer length: read directly from the boxed slice's
+    /// fat-pointer length. We previously cached this in a separate `Cell`,
+    /// but that introduced a TOCTOU window during `try_grow` (the buffer
+    /// is replaced before the cached size is updated) and made it
+    /// impossible to detect external heap corruption of the `Box`
+    /// fat-pointer. Reading the slice length each time is one extra
+    /// load and is single-thread safe (only the thread that holds `&self`
+    /// can mutate `buf`).
     #[inline]
     fn blen(&self) -> usize {
-        self.buf_len.get()
+        // SAFETY: single-thread; `&self` access; no &mut to `*buf.get()`
+        // is held across this read. Borrow the boxed slice explicitly
+        // (avoid `(*self.buf.get()).len()` which Clippy flags as an
+        // implicit autoref through a raw pointer).
+        unsafe { (&*self.buf.get()).len() }
     }
     #[inline]
     fn inc(&self, i: usize) -> usize {
         let m = self.blen();
-        if i + 1 == m {
+        // Defensive: if `head`/`tail` ever exceed `blen()` (e.g. the
+        // boxed-slice length was clobbered by external heap corruption),
+        // a naïve `i + 1 == m` test wraps incorrectly and we keep
+        // incrementing forever. Always reduce mod `m` first so the ring
+        // semantics are preserved.
+        if m == 0 {
+            return 0;
+        }
+        let i_mod = i % m;
+        if i_mod + 1 == m {
             0
         } else {
-            i + 1
+            i_mod + 1
         }
     }
     #[inline]
@@ -132,6 +153,11 @@ impl<T> Inner<T> {
         let h = self.head.get();
         let t = self.tail.get();
         let m = self.blen();
+        if m == 0 {
+            return 0;
+        }
+        let h = h % m;
+        let t = t % m;
         if h >= t {
             h - t
         } else {
@@ -150,7 +176,10 @@ impl<T> Inner<T> {
         let mut new_buf = Vec::with_capacity(new_len);
         new_buf.resize_with(new_len, MaybeUninit::uninit);
         let mut new_buf = new_buf.into_boxed_slice();
-        // move elements in order [tail .. tail+len)
+        // Move elements in order [tail .. tail+count) into [0 .. count)
+        // of the new buffer. `inc` here still reads the OLD length via
+        // `blen() = (*self.buf.get()).len()` because `self.buf` has not
+        // been swapped yet.
         let mut t = self.tail.get();
         let count = self.len();
         for i in 0..count {
@@ -158,36 +187,79 @@ impl<T> Inner<T> {
             new_buf[i].write(v);
             t = self.inc(t);
         }
-        // swap in
+        // Reset head/tail BEFORE swapping the buffer so that any
+        // subsequent `blen()` (which now returns the new buffer length)
+        // sees consistent indices. Writing `head`/`tail` to values that
+        // fit the OLD length is safe — after the swap they fit the new
+        // length too (count < new_len since new_len = 2*old_cap + 1).
+        self.tail.set(0);
+        self.head.set(count);
+        // Replace the buffer last. The OLD Box's drop deallocates the
+        // old heap region; its `MaybeUninit<T>` cells are no-op-drop so
+        // no double-free of the moved-out `T`s.
         unsafe {
             *self.buf.get() = new_buf;
         }
-        self.tail.set(0);
-        self.head.set(count);
+        // `buf_len` field is kept around for diagnostics only; it MUST
+        // mirror `(*self.buf.get()).len()` after this point. `blen()`
+        // reads the authoritative value directly from the slice so a
+        // mismatch can only matter for someone inspecting `buf_len`.
         self.buf_len.set(new_len);
     }
 
+    /// # Safety
+    ///
+    /// Caller must ensure the slot at `idx % blen` is uninitialized
+    /// (i.e. either never written or already read via `read_at`). The
+    /// index is reduced modulo the actual buffer length so that a
+    /// stale `head` value never reaches the boxed-slice bounds check —
+    /// this used to abort the process at the first `head ≥ buf.len()`
+    /// with a generic "index out of bounds" panic that hid the real
+    /// invariant violation.
     #[inline]
     unsafe fn write_at(&self, idx: usize, val: T) {
-        (&mut *self.buf.get())[idx].write(val);
+        let buf = &mut *self.buf.get();
+        let m = buf.len();
+        debug_assert!(m > 0, "SPSC buffer is empty (len=0)");
+        let i = idx % m;
+        buf[i].write(val);
     }
+    /// # Safety
+    ///
+    /// Caller must ensure the slot at `idx % blen` is initialized
+    /// (between `tail` and `head` in the ring's logical order). See
+    /// [`write_at`] for the modulus rationale.
     #[inline]
     unsafe fn read_at(&self, idx: usize) -> T {
-        (&mut *self.buf.get())[idx].assume_init_read()
+        let buf = &mut *self.buf.get();
+        let m = buf.len();
+        debug_assert!(m > 0, "SPSC buffer is empty (len=0)");
+        let i = idx % m;
+        buf[i].assume_init_read()
     }
 }
 
 impl<T> Drop for Inner<T> {
     fn drop(&mut self) {
-        // Drop any remaining initialized elements
-        while self.tail.get() != self.head.get() {
-            let t = self.tail.get();
-            // safe: we have &mut self; elements in [tail, head) are initialized
-            unsafe {
-                self.buf.get_mut()[t].assume_init_drop();
-            }
-            self.tail.set(self.inc(t));
+        // Drop any remaining initialized elements. We reduce the index
+        // modulo the actual buffer length on every iteration so a stale
+        // tail value can't index past the boxed slice. `head` is also
+        // reduced for the loop condition.
+        let m = self.buf.get_mut().len();
+        if m == 0 {
+            return;
         }
+        let head = self.head.get() % m;
+        let mut tail = self.tail.get() % m;
+        while tail != head {
+            // SAFETY: we have &mut self; elements in [tail, head) are
+            // initialized, indices are reduced to [0, m).
+            unsafe {
+                self.buf.get_mut()[tail].assume_init_drop();
+            }
+            tail = (tail + 1) % m;
+        }
+        self.tail.set(head);
     }
 }
 
