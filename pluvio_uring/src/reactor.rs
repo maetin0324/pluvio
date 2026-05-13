@@ -274,25 +274,51 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
     }
 
     fn status(&self) -> pluvio_runtime::reactor::ReactorStatus {
-        // Runningになる条件は以下
-        // 1. submission の長さが submit_depth を超えた場合
-        // 2. submission が空でなく、前回の送信から wait_submit_timeout を超えた場合
-        // 3. 完了していないI/Oがあり、前回のenterからwait_complete_timeoutを超えた場合
+        // Two modes:
+        //
+        // 1. Timeout-gated (default): Running only when submit_depth is hit
+        //    or a configured timeout (wait_submit_timeout / wait_complete_timeout)
+        //    has elapsed. Stales CQEs by up to ~timeout × status_cache_iterations.
+        //
+        // 2. Active-poll (PLUVIO_URING_ALWAYS_POLL=1): Running whenever
+        //    there's any pending SQE or in-flight I/O. Drains CQEs every
+        //    runtime iteration. Burns more CPU at idle but lets a chunk-write
+        //    completion wake the awaiting future within ~1 µs instead of
+        //    waiting on the timeout (job 17067 profile showed write_us p99
+        //    inflated from 55→1157 µs by the default 1 ms timeout).
         let mut ring = self.ring.borrow_mut();
         let submission = ring.submission();
+
+        let completed_count = self.completed_count.get();
+        let submitted_count = self
+            .user_data_counter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let has_pending_io = completed_count < submitted_count;
+        let has_pending_sqe = !submission.is_empty();
+
+        // Cached once per process via std::sync::OnceLock to avoid repeated
+        // env::var() lookups in the hot status() path.
+        use std::sync::OnceLock;
+        static ALWAYS_POLL: OnceLock<bool> = OnceLock::new();
+        let always_poll = *ALWAYS_POLL.get_or_init(|| {
+            std::env::var("PLUVIO_URING_ALWAYS_POLL")
+                .ok()
+                .map(|v| v != "0")
+                .unwrap_or(false)
+        });
+
+        if always_poll {
+            if has_pending_sqe || has_pending_io {
+                return ReactorStatus::Running;
+            }
+            return ReactorStatus::Stopped;
+        }
 
         // elapsed()は1回だけ呼び出し、結果を再利用（clock_gettimeのオーバーヘッド削減）
         let elapsed = {
             let last = self.last_submit_time.borrow();
             last.elapsed()
         };
-
-        // 完了していないI/Oがあるか確認
-        let completed_count = self.completed_count.get();
-        let submitted_count = self
-            .user_data_counter
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let has_pending_io = completed_count < submitted_count;
 
         if let Some(_) = self.io_uring_params.sq_poll {
             // SQPOLLモードの場合、complete_timeoutのみチェック
@@ -303,8 +329,7 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
             // SQPOLLモードでない場合、3条件をチェック
             let submission_len = submission.len();
             if submission_len >= self.io_uring_params.submit_depth as usize
-                || (!submission.is_empty()
-                    && elapsed >= self.io_uring_params.wait_submit_timeout)
+                || (has_pending_sqe && elapsed >= self.io_uring_params.wait_submit_timeout)
                 || (has_pending_io && elapsed >= self.io_uring_params.wait_complete_timeout)
             {
                 return ReactorStatus::Running;
