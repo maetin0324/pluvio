@@ -9,6 +9,7 @@ pub mod allocator;
 pub mod builder;
 pub mod file;
 pub mod reactor;
+pub mod socket;
 
 #[async_backtrace::framed]
 pub async fn prepare_buffer(allocator: Rc<FixedBufferAllocator>) -> FixedBuffer {
