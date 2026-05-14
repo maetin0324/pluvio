@@ -50,8 +50,20 @@ pub struct Receiver<T> {
     inner: Rc<Inner<T>>,
 }
 
+/// Magic value to detect heap corruption of the SPSC `Inner` struct.
+/// We set this at construction and check it on every send/recv. If the
+/// magic ever reads wrong, abort with a backtrace at the moment of
+/// detection so we can find which allocation pattern overwrites SPSC
+/// state. Address-of canary fields are also reported to aid in `gdb
+/// watch`-style root-cause hunts.
+const INNER_MAGIC_START: u64 = 0x5350_5343_4D41_4748; // "SPSCMAGH"
+const INNER_MAGIC_END: u64 = 0x5350_5343_4D41_4754; // "SPSCMAGT"
+
 #[derive(Debug)]
 struct Inner<T> {
+    // Magic guard so we can detect adjacent-allocation corruption that
+    // clobbers our struct (e.g. via UAF or buffer overflow).
+    magic_start: u64,
     // Ring buffer storage (length = buf_len). We keep one empty slot as a sentinel.
     buf: UnsafeCell<Box<[MaybeUninit<T>]>>,
     // Actual buffer length (including the extra sentinel slot). Mutable due to growth for `unbounded`.
@@ -61,9 +73,16 @@ struct Inner<T> {
     tail: Cell<usize>,
     // Channel mode
     unbounded: bool,
-    // Liveness flags
-    sender_alive: Cell<bool>,
+    // Liveness counts. `sender_count` was previously a `Cell<bool>`,
+    // which meant dropping ANY one of the Sender clones (e.g. a per-task
+    // waker holding `task_sender.clone()`) set the flag to false and
+    // misled `Receiver::try_recv` into reporting `Disconnected` while
+    // other live senders existed. Convert to a refcount so that the
+    // channel is correctly disconnected only when every Sender is gone.
+    sender_count: Cell<usize>,
     receiver_alive: Cell<bool>,
+    // Trailing magic so writes past the bools are also caught.
+    magic_end: u64,
 }
 
 impl<T> Inner<T> {
@@ -75,13 +94,15 @@ impl<T> Inner<T> {
         buf.resize_with(buf_len, MaybeUninit::uninit);
         let buf = buf.into_boxed_slice();
         Self {
+            magic_start: INNER_MAGIC_START,
             buf: UnsafeCell::new(buf),
             buf_len: Cell::new(buf_len),
             head: Cell::new(0),
             tail: Cell::new(0),
             unbounded: false,
-            sender_alive: Cell::new(true),
+            sender_count: Cell::new(1),
             receiver_alive: Cell::new(true),
+            magic_end: INNER_MAGIC_END,
         }
     }
 
@@ -92,13 +113,57 @@ impl<T> Inner<T> {
         buf.resize_with(buf_len, MaybeUninit::uninit);
         let buf = buf.into_boxed_slice();
         Self {
+            magic_start: INNER_MAGIC_START,
             buf: UnsafeCell::new(buf),
             buf_len: Cell::new(buf_len),
             head: Cell::new(0),
             tail: Cell::new(0),
             unbounded: true,
-            sender_alive: Cell::new(true),
+            sender_count: Cell::new(1),
             receiver_alive: Cell::new(true),
+            magic_end: INNER_MAGIC_END,
+        }
+    }
+
+    #[inline]
+    fn any_sender_alive(&self) -> bool {
+        self.sender_count.get() > 0
+    }
+
+    #[inline]
+    fn inc_sender(&self) {
+        self.sender_count.set(self.sender_count.get() + 1);
+    }
+
+    #[inline]
+    fn dec_sender(&self) {
+        let c = self.sender_count.get();
+        debug_assert!(c > 0, "Sender refcount dropping below zero");
+        self.sender_count.set(c.saturating_sub(1));
+    }
+
+    /// Check the magic canaries; abort with backtrace if the `Inner`
+    /// struct has been overwritten by adjacent heap corruption.
+    #[inline]
+    fn check_magic(&self, where_: &str) {
+        if self.magic_start != INNER_MAGIC_START || self.magic_end != INNER_MAGIC_END {
+            // SAFETY: panic with backtrace at the precise moment we observe
+            // the corruption. Calling abort() here also stops the process
+            // before it can drop and SEGV on the bad Box pointer.
+            let bt = std::backtrace::Backtrace::force_capture();
+            eprintln!(
+                "SPSC Inner heap corruption detected at {where_}: \
+                 magic_start={:#x} (expected {:#x}), magic_end={:#x} (expected {:#x}), \
+                 self_ptr={:p}, magic_start_addr={:p}, magic_end_addr={:p}\n{bt}",
+                self.magic_start,
+                INNER_MAGIC_START,
+                self.magic_end,
+                INNER_MAGIC_END,
+                self,
+                &self.magic_start,
+                &self.magic_end,
+            );
+            std::process::abort();
         }
     }
 
@@ -289,6 +354,7 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
 impl<T> Sender<T> {
     /// Non-blocking send.
     pub fn try_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+        self.inner.check_magic("Sender::try_send");
         if !self.inner.receiver_alive.get() {
             return Err(TrySendError::Disconnected(msg));
         }
@@ -335,15 +401,16 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        self.inner.sender_alive.set(false);
+        self.inner.dec_sender();
     }
 }
 
 impl<T> Receiver<T> {
     /// Non-blocking receive.
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        self.inner.check_magic("Receiver::try_recv");
         if self.inner.is_empty() {
-            if !self.inner.sender_alive.get() {
+            if !self.inner.any_sender_alive() {
                 return Err(TryRecvError::Disconnected);
             }
             return Err(TryRecvError::Empty);
@@ -392,7 +459,7 @@ impl<T> Receiver<T> {
         self.inner.is_empty()
     }
     pub fn is_disconnected(&self) -> bool {
-        !self.inner.sender_alive.get()
+        !self.inner.any_sender_alive()
     }
     pub fn capacity(&self) -> usize {
         self.inner.cap()
@@ -407,6 +474,9 @@ impl<T> Drop for Receiver<T> {
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
+        // Track the new live sender so the channel only disconnects
+        // when EVERY clone has been dropped.
+        self.inner.inc_sender();
         Sender {
             inner: self.inner.clone(),
         }
