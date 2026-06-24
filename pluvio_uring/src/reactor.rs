@@ -29,6 +29,85 @@ pub struct IoUringReactor {
     pub(crate) last_submit_time: RefCell<std::time::Instant>,
     pub(crate) io_uring_params: IoUringParams,
     pub(crate) completed_count: Cell<u64>,
+    pub(crate) submit_thread: Option<SubmitThread>,
+}
+
+/// Userspace submit-offload thread ("userspace SQPOLL").
+///
+/// Kernel SQPOLL is unusable on Sirius's RHEL 9.6 kernel — heavy
+/// BenchFS load with SQPOLL freezes whole hosts (2026-06-11/12 bisect).
+/// SQPOLL's real benefit for us is not saved syscalls but moving the
+/// inline block-layer submission work out of the single-threaded
+/// reactor. This thread reproduces that: the reactor publishes new
+/// SQEs with `SubmissionQueue::sync()` (a fenced memory write, no
+/// syscall) and signals this thread, which performs the actual
+/// `io_uring_enter` — so the NVMe submission CPU cost lands here
+/// instead of on the reactor thread.
+///
+/// Enabled via env `PLUVIO_URING_SUBMIT_THREAD=1`; ignored when SQPOLL
+/// is active. The thread is detached and lives for the process.
+pub(crate) struct SubmitThread {
+    pub(crate) flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) thread: std::thread::Thread,
+}
+
+impl SubmitThread {
+    pub(crate) fn spawn(ring_fd: std::os::unix::io::RawFd, sq_entries: u32) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let f = flag.clone();
+        // `PLUVIO_URING_SUBMIT_THREAD=spin` busy-waits instead of
+        // parking. park/unpark costs a futex round-trip (~µs) per
+        // signal, which V1 (28753, 2026-06-12) showed erases the gain
+        // for page-cache reads that complete inline in io_uring_enter:
+        // ior-hard-write +8% vs kernel SQPOLL but ior-hard-read -28%.
+        // Spinning burns one core per daemon; server hosts run 4
+        // daemons on 24 cores, so that is affordable.
+        let spin = std::env::var("PLUVIO_URING_SUBMIT_THREAD")
+            .map(|v| v == "spin")
+            .unwrap_or(false);
+        let handle = std::thread::Builder::new()
+            .name("pluvio-uring-sub".into())
+            .spawn(move || {
+                loop {
+                    while !f.swap(false, Ordering::Acquire) {
+                        if spin {
+                            std::hint::spin_loop();
+                        } else {
+                            std::thread::park();
+                        }
+                    }
+                    // `to_submit` only caps how many published SQEs the
+                    // kernel consumes; passing the SQ size drains all.
+                    // Errors (EINTR/EAGAIN) are not retried here: the
+                    // reactor re-signals on every poll while SQEs are
+                    // pending, so a failed enter is retried naturally.
+                    unsafe {
+                        libc::syscall(
+                            libc::SYS_io_uring_enter,
+                            ring_fd as libc::c_long,
+                            sq_entries as libc::c_long,
+                            0_i64,
+                            0_i64,
+                            std::ptr::null::<libc::sigset_t>(),
+                            0_i64,
+                        );
+                    }
+                }
+            })
+            .expect("spawn pluvio-uring-sub thread");
+        SubmitThread {
+            flag,
+            thread: handle.thread().clone(),
+        }
+    }
+
+    /// True when `PLUVIO_URING_SUBMIT_THREAD` requests the offload.
+    pub(crate) fn enabled_by_env() -> bool {
+        std::env::var("PLUVIO_URING_SUBMIT_THREAD")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    }
 }
 
 /// Parameters controlling io_uring behaviour.
@@ -76,7 +155,6 @@ impl Future for WaitHandle {
 
         // 既に結果がある場合は Ready を返す
         if let Some(result) = handle.result.borrow_mut().take() {
-            tracing::trace!("WaitHandle completed with result: {:?}", result);
             return Poll::Ready(result);
         }
 
@@ -115,7 +193,7 @@ impl IoUringReactor {
     }
 
     /// Push an SQE to the ring and return a [`WaitHandle`] for its completion.
-    #[tracing::instrument(level = "trace", skip(self, sqe))]
+    // tracing::instrument removed — hot path called 320k+ times/sec.
     pub fn push_sqe(&self, sqe: io_uring::squeue::Entry) -> WaitHandle {
         let user_data = self
             .user_data_counter
@@ -147,21 +225,27 @@ impl IoUringReactor {
         let pending_sqe_count = ring.submission().len();
         let has_pending_sqes = pending_sqe_count > 0;
 
-        // Log SQ depth for performance analysis
-        if has_pending_sqes {
-            tracing::debug!(
-                "io_uring: submitting {} SQEs (io_depth={})",
-                pending_sqe_count,
-                pending_sqe_count
-            );
-        }
-
-        if let Some(_) = self.io_uring_params.sq_poll {
-            // SQPOLLモードの場合、submitは不要
-            // SQEの送信はスキップ
+        if self.io_uring_params.sq_poll.is_some() {
+            // SQPOLLモードでも、カーネルSQスレッドが`sq_thread_idle`経過後に
+            // sleepする。新しいSQEをpushしてもsleep中のスレッドは自動的に
+            // 起きないので、`sq.need_wakeup()`をチェックして必要なら
+            // `submit()`を呼んで`IORING_ENTER_SQ_WAKEUP`を発行する。
+            // io_uring crateの`submit()`はSQPOLL有効時に内部で必要に応じ
+            // wake-up flagを付与する。
+            if has_pending_sqes && ring.submission().need_wakeup() {
+                ring.submit().expect("Failed to submit SQE (SQPOLL wakeup)");
+            }
         } else if has_pending_sqes {
-            // Only submit if there are pending SQEs (avoid unnecessary syscall)
-            ring.submit().expect("Failed to submit SQE");
+            if let Some(st) = &self.submit_thread {
+                // Userspace SQPOLL: publish the tail (memory write, no
+                // syscall) and let the dedicated thread io_uring_enter.
+                ring.submission().sync();
+                st.flag.store(true, std::sync::atomic::Ordering::Release);
+                st.thread.unpark();
+            } else {
+                // Only submit if there are pending SQEs (avoid unnecessary syscall)
+                ring.submit().expect("Failed to submit SQE");
+            }
         }
 
         // Update last submit time only if we actually had work
@@ -320,8 +404,13 @@ impl pluvio_runtime::reactor::Reactor for IoUringReactor {
             last.elapsed()
         };
 
-        if let Some(_) = self.io_uring_params.sq_poll {
-            // SQPOLLモードの場合、complete_timeoutのみチェック
+        if self.io_uring_params.sq_poll.is_some() {
+            // SQPOLLモード: pending SQEがあり、カーネルSQスレッドが
+            // sleep中（need_wakeup）の場合は起こす必要がある。
+            // CQ側は通常通り complete_timeout チェック。
+            if has_pending_sqe && submission.need_wakeup() {
+                return ReactorStatus::Running;
+            }
             if has_pending_io && elapsed >= self.io_uring_params.wait_complete_timeout {
                 return ReactorStatus::Running;
             }

@@ -156,7 +156,7 @@ impl DmaFile {
     /// 0-based slot the kernel knows it as. `len` must be ≤ the registered
     /// buffer's size, and the memory must stay valid until the SQE
     /// completes.
-    #[async_backtrace::framed]
+    // async_backtrace removed from hot path (benchfs ior-hard 320k RPC/s).
     pub async fn write_fixed_raw(
         &self,
         offset: u64,
@@ -178,7 +178,7 @@ impl DmaFile {
 
     /// `read_fixed` variant that does not take ownership of a `FixedBuffer`.
     /// See [`write_fixed_raw`] for safety requirements.
-    #[async_backtrace::framed]
+    // async_backtrace removed from hot path (benchfs ior-hard 320k RPC/s).
     pub async fn read_fixed_raw(
         &self,
         offset: u64,
@@ -269,10 +269,115 @@ impl DmaFile {
         self.reactor.push_sqe(sqe).await
     }
 
+    /// Stat a path asynchronously via io_uring (`IORING_OP_STATX`).
+    ///
+    /// `flags` and `mask` follow the libc `statx(2)` semantics:
+    ///
+    /// - `flags`: `AT_STATX_SYNC_AS_STAT` (0) for default behavior,
+    ///   `AT_SYMLINK_NOFOLLOW` for lstat-style behavior, etc.
+    /// - `mask`: `STATX_BASIC_STATS` (= 0x07ff) for the common subset
+    ///   (type/mode/nlink/uid/gid/atime/mtime/ctime/ino/size/blocks).
+    ///
+    /// On success, returns the kernel-filled `libc::statx` struct.
+    /// Uses `AT_FDCWD` so the path is resolved relative to the process'
+    /// CWD (BenchFS keeps a single CWD because it runs single-threaded).
+    ///
+    /// Why bother going async here? `find` / mdtest-stat phases issue
+    /// hundreds of thousands of stats; doing each via blocking `statx(2)`
+    /// would burn the reactor thread on syscalls. `IORING_OP_STATX` lets
+    /// us batch many stats per `io_uring_enter`.
+    #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(path))]
+    pub async fn statx_path(
+        path: &str,
+        flags: i32,
+        mask: u32,
+    ) -> std::io::Result<libc::statx> {
+        let reactor = IoUringReactor::get_or_init();
+        Self::statx_path_with_reactor(path, flags, mask, reactor).await
+    }
+
+    /// Same as [`Self::statx_path`] but with an explicit reactor.
+    #[async_backtrace::framed]
+    #[tracing::instrument(level = "trace", skip(path, reactor))]
+    pub async fn statx_path_with_reactor(
+        path: &str,
+        flags: i32,
+        mask: u32,
+        reactor: Rc<IoUringReactor>,
+    ) -> std::io::Result<libc::statx> {
+        let path_cstr = std::ffi::CString::new(path).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "path contains null byte")
+        })?;
+
+        // The kernel writes the result here. Box it so the pointer is
+        // stable while the future is suspended.
+        let mut statx_buf: Box<libc::statx> = unsafe { Box::new(std::mem::zeroed()) };
+
+        let sqe = io_uring::opcode::Statx::new(
+            io_uring::types::Fd(libc::AT_FDCWD),
+            path_cstr.as_ptr(),
+            // libc::statx and io_uring::types::statx have identical
+            // memory layout per the io-uring crate docs — the opaque
+            // `statx` is only opaque to discourage callers from poking
+            // at it directly.
+            (&mut *statx_buf as *mut libc::statx).cast::<io_uring::types::statx>(),
+        )
+        .flags(flags)
+        .mask(mask)
+        .build();
+
+        let _ = reactor.push_sqe(sqe).await?;
+        // path_cstr and statx_buf were live through the await.
+        Ok(*statx_buf)
+    }
+
     /// Acquire a fixed buffer from the reactor's allocator.
     #[async_backtrace::framed]
     #[tracing::instrument(level = "trace", skip(self))]
     pub async fn acquire_buffer(&self) -> FixedBuffer {
         self.reactor.acquire_buffer().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::IoUringReactorBuilder;
+    use pluvio_runtime::executor::{set_runtime, Runtime};
+
+    #[test]
+    fn statx_returns_file_size() {
+        // Use a unique temp file so this test is hermetic.
+        let path = format!(
+            "/tmp/pluvio_uring_statx_test_{}.bin",
+            std::process::id()
+        );
+        std::fs::write(&path, b"hello, statx").expect("write tmp file");
+        let metadata = std::fs::metadata(&path).expect("metadata");
+        let expected_size = metadata.len();
+
+        let runtime = Runtime::new(64);
+        set_runtime(runtime.clone());
+        let reactor = IoUringReactorBuilder::default().build();
+        IoUringReactor::init(reactor.clone()).ok();
+        runtime.register_reactor("iouring", reactor.clone());
+
+        let path_for_async = path.clone();
+        runtime.block_on_with_name_and_runtime("statx_test", async move {
+            let st = DmaFile::statx_path(
+                &path_for_async,
+                0,
+                libc::STATX_BASIC_STATS,
+            )
+            .await
+            .expect("statx");
+            assert_eq!(st.stx_size, expected_size);
+            // Regular file — top bits of stx_mode should be S_IFREG.
+            let ftype = st.stx_mode as u32 & libc::S_IFMT;
+            assert_eq!(ftype, libc::S_IFREG);
+        });
+
+        let _ = std::fs::remove_file(&path);
     }
 }

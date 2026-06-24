@@ -14,7 +14,7 @@ use io_uring::IoUring;
 
 use crate::{
     allocator::FixedBufferAllocator,
-    reactor::{IoUringParams, IoUringReactor},
+    reactor::{IoUringParams, IoUringReactor, SubmitThread},
 };
 
 /// Configures parameters for a new [`IoUringReactor`].
@@ -102,6 +102,16 @@ impl IoUringReactorBuilder {
             tracing::trace!("io_uring does not support IORING_FEAT_NODROP");
         }
 
+        // Userspace SQPOLL (see reactor::SubmitThread): only meaningful
+        // when kernel SQPOLL is off, and opt-in via env.
+        let submit_thread = if self.sq_poll.is_none() && SubmitThread::enabled_by_env() {
+            use std::os::unix::io::AsRawFd;
+            tracing::info!("io_uring submit-offload thread enabled (PLUVIO_URING_SUBMIT_THREAD)");
+            Some(SubmitThread::spawn(ring.as_raw_fd(), self.queue_size))
+        } else {
+            None
+        };
+
         let ring = Rc::new(RefCell::new(ring));
 
         let allocator = FixedBufferAllocator::new(
@@ -123,6 +133,7 @@ impl IoUringReactorBuilder {
                 sq_poll: self.sq_poll,
             },
             completed_count: Cell::new(0),
+            submit_thread,
         });
 
         IoUringReactor::init(reactor.clone()).expect("Failed to initialize IoUringReactor");

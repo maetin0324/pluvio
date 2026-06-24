@@ -143,6 +143,12 @@ impl Worker {
     pub fn inner(&self) -> &async_ucx::ucp::Worker {
         &self.worker
     }
+
+    /// Returns the `async_ucx::ucp::Context` this worker belongs to.
+    /// Forwarded from async-ucx for benchfs ucx_relay zero-copy support.
+    pub fn ucx_context(&self) -> Arc<async_ucx::ucp::Context> {
+        self.worker.context()
+    }
 }
 
 impl Worker {
